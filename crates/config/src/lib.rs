@@ -18,6 +18,7 @@ const DATABASE_URL_ENV: &str = "DATABASE_URL";
 const PORT_ENV: &str = "PORT";
 const LOG_LEVEL_ENV: &str = "RUST_LOG";
 const NEXUS_ENDPOINT_URL_ENV: &str = "NEXUS_ENDPOINT_URL";
+const APP_ENV_ENV: &str = "APP_ENV";
 
 const DEFAULT_DATABASE_URL: &str = "postgres://localhost:5432/cognitum_consultants";
 const DEFAULT_PORT: u16 = 3000;
@@ -26,6 +27,14 @@ const DEFAULT_LOG_LEVEL: &str = "info";
 // environment generic); this is a dev-only placeholder, TBD once a target
 // environment is confirmed.
 const DEFAULT_NEXUS_ENDPOINT_URL: &str = "http://localhost:8080";
+/// Default deployment environment name. Defaults to `dev` so local
+/// `cargo run`/`cargo test` invocations (which typically don't set
+/// `APP_ENV`) behave as dev by default — deployed environments are
+/// expected to set `APP_ENV` explicitly (e.g. `prod`, `staging`).
+const DEFAULT_APP_ENV: &str = "dev";
+/// The value [`Config::environment`] must equal for dev-only code paths
+/// (e.g. `auth`'s `dev-auth` stub, ADR-008) to be allowed to activate.
+pub const DEV_ENVIRONMENT: &str = "dev";
 
 /// Application configuration, loaded once at startup from environment
 /// variables (falling back to dev defaults when a variable is unset).
@@ -58,6 +67,12 @@ pub struct Config {
     /// Base URL of the Nexus routing layer that `nexus-client` (ADR-007)
     /// will call. Placeholder until a real Nexus environment is confirmed.
     pub nexus_endpoint_url: String,
+    /// Deployment environment name (e.g. `dev`, `staging`, `prod`), sourced
+    /// from `APP_ENV`. Defaults to [`DEV_ENVIRONMENT`] when unset. Exists
+    /// so environment-gated dev-only code (e.g. `auth`'s `dev-auth` stub,
+    /// ADR-008) has a single source of truth to check against rather than
+    /// each crate re-implementing its own env-detection logic.
+    pub environment: String,
 }
 
 impl Config {
@@ -91,7 +106,16 @@ impl Config {
         let nexus_endpoint_url =
             get(NEXUS_ENDPOINT_URL_ENV).unwrap_or_else(|| DEFAULT_NEXUS_ENDPOINT_URL.to_owned());
 
-        Config { database_url, port, log_level, nexus_endpoint_url }
+        let environment = get(APP_ENV_ENV).unwrap_or_else(|| DEFAULT_APP_ENV.to_owned());
+
+        Config { database_url, port, log_level, nexus_endpoint_url, environment }
+    }
+
+    /// True when this config's [`environment`](Config::environment) is
+    /// [`DEV_ENVIRONMENT`]. Convenience for dev-only gating callers (e.g.
+    /// `auth`'s `dev-auth` stub, ADR-008).
+    pub fn is_dev(&self) -> bool {
+        self.environment == DEV_ENVIRONMENT
     }
 
     /// A form of `database_url` safe to log: masks any `user:password@`
@@ -129,6 +153,8 @@ mod tests {
         assert_eq!(config.port, DEFAULT_PORT);
         assert_eq!(config.log_level, DEFAULT_LOG_LEVEL);
         assert_eq!(config.nexus_endpoint_url, DEFAULT_NEXUS_ENDPOINT_URL);
+        assert_eq!(config.environment, DEFAULT_APP_ENV);
+        assert!(config.is_dev());
     }
 
     #[test]
@@ -138,6 +164,7 @@ mod tests {
             (PORT_ENV, "4000"),
             (LOG_LEVEL_ENV, "debug"),
             (NEXUS_ENDPOINT_URL_ENV, "https://nexus.example.com"),
+            (APP_ENV_ENV, "prod"),
         ]);
 
         let config = Config::from_env(lookup(vars));
@@ -146,6 +173,8 @@ mod tests {
         assert_eq!(config.port, 4000);
         assert_eq!(config.log_level, "debug");
         assert_eq!(config.nexus_endpoint_url, "https://nexus.example.com");
+        assert_eq!(config.environment, "prod");
+        assert!(!config.is_dev());
     }
 
     #[test]
@@ -162,6 +191,7 @@ mod tests {
             port: DEFAULT_PORT,
             log_level: DEFAULT_LOG_LEVEL.to_owned(),
             nexus_endpoint_url: DEFAULT_NEXUS_ENDPOINT_URL.to_owned(),
+            environment: DEFAULT_APP_ENV.to_owned(),
         };
 
         assert_eq!(config.redacted_database_url(), "postgres://***@db.internal:5432/prod");
@@ -174,6 +204,7 @@ mod tests {
             port: DEFAULT_PORT,
             log_level: DEFAULT_LOG_LEVEL.to_owned(),
             nexus_endpoint_url: DEFAULT_NEXUS_ENDPOINT_URL.to_owned(),
+            environment: DEFAULT_APP_ENV.to_owned(),
         };
 
         assert_eq!(config.redacted_database_url(), DEFAULT_DATABASE_URL);

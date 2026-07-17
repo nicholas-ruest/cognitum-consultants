@@ -3,3 +3,26 @@ name = "auth"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+
+[dependencies]
+uuid = { workspace = true }
+# Matches persistence's chrono choice (PROMPT-09) so `Session::expires_at`
+# round-trips cleanly through the ADR-010 datastore once U11 wires real
+# storage.
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+# `SessionProvider` needs to be object-safe (`Arc<dyn SessionProvider>` in
+# bff-api's Axum state, U11) which native async-fn-in-traits does not
+# support; already present transitively via sqlx (see Cargo.lock).
+async-trait = "0.1.89"
+thiserror = "2.0.18"
+# Only needed to check `Config::is_dev()` before the dev-stub is allowed to
+# construct itself (ADR-008 safety valve). Kept optional so the base `auth`
+# crate (trait/`Session` type only) has no dependency on `config` unless
+# `dev-auth` is enabled.
+config = { path = "../config", optional = true }
+
+[features]
+dev-auth = ["dep:config"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
