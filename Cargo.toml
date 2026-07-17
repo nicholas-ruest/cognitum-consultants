@@ -13,3 +13,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 publish = false
+
+[workspace.dependencies]
+axum = "0.8.9"
+tokio = { version = "1.53.0", features = ["rt-multi-thread", "macros", "net"] }
