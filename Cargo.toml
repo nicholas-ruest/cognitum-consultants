@@ -17,3 +17,7 @@ publish = false
 [workspace.dependencies]
 axum = "0.8.9"
 tokio = { version = "1.53.0", features = ["rt-multi-thread", "macros", "net"] }
+# Shared with nexus-client (U12), which reads the correlation ID off the
+# current tracing span to propagate on outbound Nexus calls (ADR-012).
+tracing = "0.1.44"
+uuid = { version = "1.24.0", features = ["v4"] }
