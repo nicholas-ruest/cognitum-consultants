@@ -16,6 +16,18 @@ opentelemetry = "0.32.0"
 # ADR-016 resilience decorators (timeout/retry/circuit-breaker) need
 # `tokio::time::{timeout, sleep}`.
 tokio = { workspace = true, features = ["time"] }
+# `PermissionAssertion::expires_at` (PROMPT-14, armor.rs). Matches
+# persistence's and auth's chrono choice (0.4.45) so timestamps round-trip
+# cleanly across crate boundaries; `serde` feature needed for `DateTime<Utc>`
+# to derive `Deserialize` off Nexus's JSON response.
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "serde"] }
+# `PermissionAssertion` derives `serde::Deserialize` to parse Armor's
+# response body (PROMPT-14).
+serde = { version = "1.0", features = ["derive"] }
+# Already present transitively via reqwest (see Cargo.lock); declared
+# directly so armor.rs can percent-encode the `consultant_id` query param
+# without hand-rolling percent-encoding.
+url = "2.5.8"
 
 [dev-dependencies]
 # ADR-013 layer 2: wiremock-backed gateway contract tests against hand-written

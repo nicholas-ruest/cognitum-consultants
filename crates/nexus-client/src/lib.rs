@@ -1,7 +1,9 @@
 //! nexus-client: one submodule per ACL gateway (sales, commit, edu, capacity,
 //! customer, execution, products, landscape, legal, armor). Pure translation
 //! boundary — no business policy logic (see ../ddd/anti-corruption-layers.md §11).
-//! Per-capability submodules are added starting at U12; this is the empty stub.
+//! Per-capability submodules are added starting at U12; [`armor`] (PROMPT-14)
+//! is the first one landed — see its module docs for the transport-stack-
+//! assembly convention future gateways should follow.
 //!
 //! # Resilience decorators (ADR-016, PROMPT-13)
 //! [`timeout`], [`retry`], and [`circuit_breaker`] each provide a
@@ -12,12 +14,14 @@
 //!   — note the deliberate *absence* of `RetryingTransport` here; see
 //!   `retry`'s module docs for why writes must never be auto-retried.
 
+pub mod armor;
 pub mod circuit_breaker;
 pub mod reqwest_transport;
 pub mod retry;
 pub mod timeout;
 pub mod transport;
 
+pub use armor::{ArmorGateway, ArmorGatewayError, NexusArmorGateway, PermissionAssertion};
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakingTransport, CircuitState, SlidingWindowCircuitBreaker};
 pub use reqwest_transport::ReqwestNexusTransport;
 pub use retry::{DEFAULT_MAX_RETRIES, RetryingTransport};
