@@ -36,7 +36,7 @@ jobs:
         run: cargo test --workspace
 
   frontend:
-    name: Frontend (build, lint)
+    name: Frontend (build, lint, test)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -60,3 +60,11 @@ jobs:
 
       - name: npm run lint
         run: npm run lint
+
+      - name: npm run test (Vitest)
+        run: npm run test
+
+      # Playwright e2e (layer 5, ADR-013 §6) is intentionally NOT run here yet.
+      # TODO(U27): wire a Playwright CI job once the Sales lead-conflict e2e
+      # flow lands — it needs a built/served app (frontend + BFF, or mocked
+      # Nexus) rather than just `npm run dev`, which this job does not stand up.

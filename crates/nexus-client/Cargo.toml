@@ -3,3 +3,8 @@ name = "nexus-client"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+
+[dev-dependencies]
+# ADR-013 layer 2: wiremock-backed gateway contract tests against hand-written
+# fixtures until real Nexus contracts mature (see ../../.plans/adr/ADR-013-testing-strategy.md).
+wiremock = "0.6.5"
