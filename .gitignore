@@ -1,0 +1,26 @@
+# Claude Code / Anthropic tooling
+.claude/
+.claude-flow/
+CLAUDE.md
+CLAUDE.local.md
+
+# Ruflo / claude-flow tooling
+.agents/
+.swarm/
+ruvector.db
+skills-lock.json
+.mcp.json
+
+# Rust
+/target/
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.log
+
+# Env
+.env
+.env.*
+!.env.example
