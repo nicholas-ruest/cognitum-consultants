@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 bff-core = { path = "../bff-core" }
+correlation-context = { path = "../correlation-context" }
 nexus-client = { path = "../nexus-client" }
 # TODO(PROMPT-11/ADR-008): `dev-auth` is enabled directly (not forwarded
 # through a `bff-api` feature flag) because no real, Armor-backed

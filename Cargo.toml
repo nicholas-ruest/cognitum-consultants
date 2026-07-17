@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/bff-api",
     "crates/bff-core",
+    "crates/correlation-context",
     "crates/nexus-client",
     "crates/auth",
     "crates/persistence",
