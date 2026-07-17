@@ -14,6 +14,13 @@ jobs:
   rust:
     name: Rust (check, clippy, test)
     runs-on: ubuntu-latest
+    # GitHub-hosted ubuntu-latest runners ship Docker Engine preinstalled
+    # and reachable via the default socket with no extra setup (see
+    # actions/runner-images' Ubuntu 24.04 software manifest) — no
+    # docker/setup step is added here. `cargo test --workspace` below
+    # includes `persistence`'s testcontainers-modules-based integration
+    # test (ADR-010/ADR-013 layer 3), which launches a real, throwaway
+    # Postgres container via that preinstalled Docker.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,6 +33,13 @@ jobs:
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
 
+      # sqlx's compile-time `query!`/`query_as!` macros normally need a
+      # reachable DATABASE_URL or a committed `.sqlx/` offline cache
+      # (ADR-010; see crates/persistence/README.md). Neither is set up here
+      # because zero such macro invocations exist yet (no aggregate tables
+      # as of U09) — nothing for `check`/`clippy` to verify against a
+      # schema. Revisit (set SQLX_OFFLINE=true and cache `.sqlx/`) once
+      # U20 adds the first real query.
       - name: cargo check --workspace
         run: cargo check --workspace
 

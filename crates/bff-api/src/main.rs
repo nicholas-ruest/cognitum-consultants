@@ -27,6 +27,21 @@ async fn main() {
         "config loaded"
     );
 
+    // Fail-fast startup (12-factor): if Postgres is unreachable, refuse to
+    // come up rather than serve traffic a persistence-backed route would
+    // later fail anyway (ADR-010 — this repo's own aggregates need
+    // Postgres as the multi-instance source of truth). No route reads the
+    // pool yet (U09 only stands up the connection), but the failure mode
+    // for "can't reach the datastore we depend on" should be the same
+    // whether or not a route is exercising it yet.
+    // Not yet consumed by any route (no persistence-backed handlers exist
+    // until U11+); kept alive for the lifetime of `main` so the pool isn't
+    // torn down immediately after this fail-fast connectivity check.
+    let db_pool = persistence::create_pool(&cfg.database_url).await.unwrap_or_else(|err| {
+        panic!("failed to connect to database at {}: {err}", cfg.redacted_database_url())
+    });
+    tracing::info!(pool_size = db_pool.size(), "database pool created");
+
     let prometheus_handle = metrics::install_recorder();
 
     let app = Router::new()
