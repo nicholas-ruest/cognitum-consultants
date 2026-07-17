@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/bff-api",
+    "crates/bff-core",
+    "crates/nexus-client",
+    "crates/auth",
+    "crates/persistence",
+    "crates/config",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false

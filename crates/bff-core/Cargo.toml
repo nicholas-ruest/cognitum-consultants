@@ -1,0 +1,9 @@
+[package]
+name = "bff-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+nexus-client = { path = "../nexus-client" }
+persistence = { path = "../persistence" }

@@ -1,0 +1,12 @@
+[package]
+name = "bff-api"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+bff-core = { path = "../bff-core" }
+nexus-client = { path = "../nexus-client" }
+auth = { path = "../auth" }
+persistence = { path = "../persistence" }
+config = { path = "../config" }
