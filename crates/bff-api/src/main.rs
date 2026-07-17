@@ -1,5 +1,6 @@
 mod correlation;
 mod metrics;
+mod permissions;
 mod session;
 mod telemetry;
 
@@ -58,6 +59,20 @@ async fn main() {
     let dev_session_provider = Arc::new(auth::dev_stub::DevStubSessionProvider::new(&cfg));
     let session_provider: Arc<dyn auth::SessionProvider> = dev_session_provider.clone();
 
+    // ADR-009/PROMPT-15's Armor ACL gateway, assembled per PROMPT-14's
+    // read-call convention (nexus_client::armor module docs):
+    // `RetryingTransport` wrapping a `TimeoutTransport` wrapping the base
+    // `ReqwestNexusTransport` — `fetch_assertions` is an idempotent query,
+    // so it is safe (and, per ADR-016, expected) to retry.
+    let armor_base_transport = nexus_client::ReqwestNexusTransport::new(&cfg.nexus_endpoint_url)
+        .unwrap_or_else(|err| panic!("invalid nexus_endpoint_url {:?}: {err}", cfg.nexus_endpoint_url));
+    let armor_timeout_transport =
+        nexus_client::TimeoutTransport::new(Arc::new(armor_base_transport), nexus_client::DEFAULT_READ_TIMEOUT);
+    let armor_transport: Arc<dyn nexus_client::NexusTransport> =
+        Arc::new(nexus_client::RetryingTransport::with_default_retries(Arc::new(armor_timeout_transport)));
+    let armor_gateway: Arc<dyn nexus_client::ArmorGateway> = Arc::new(nexus_client::NexusArmorGateway::new(armor_transport));
+    let permission_cache = Arc::new(permissions::PermissionCache::new(armor_gateway));
+
     let state = AppState {
         db_pool,
         session_provider,
@@ -68,14 +83,19 @@ async fn main() {
         // regardless, since it will matter once a real provider exists.
         secure_cookies: !cfg.is_dev(),
         prometheus_handle,
+        permission_cache,
     };
 
     // `/api/login/dev` is dev-only in practice (see `session` module docs)
     // but not `#[cfg]`-gated; `/api/session` is the one protected route
     // that exists today, behind `session::protected_router`'s uniformly
-    // applied `require_session` middleware.
-    let api_router =
-        Router::new().route("/login/dev", post(session::login_dev)).merge(session::protected_router(state.clone()));
+    // applied `require_session` middleware. `permissions::diagnostic_router`
+    // adds one more, temporary, protected route (see its doc comment) that
+    // proves the ADR-009 `is_permitted` + `403` short-circuit mechanism.
+    let api_router = Router::new()
+        .route("/login/dev", post(session::login_dev))
+        .merge(session::protected_router(state.clone()))
+        .merge(permissions::diagnostic_router(state.clone()));
 
     let app = Router::new()
         .route("/healthz", get(healthz))

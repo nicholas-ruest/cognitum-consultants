@@ -59,6 +59,14 @@ pub struct AppState {
     /// non-local environments), driven by `Config::is_dev()` at startup.
     pub secure_cookies: bool,
     pub prometheus_handle: PrometheusHandle,
+    /// Per-consultant cache of Armor `PermissionAssertion`s (ADR-009,
+    /// PROMPT-15) — see `crate::permissions` module docs for the caching/
+    /// TTL semantics and keying decision. `Arc`-wrapped (rather than
+    /// cloned per-request like the other fields, which are already cheap
+    /// `Arc`/`Copy`) since `PermissionCache` holds its own interior
+    /// `RwLock`-guarded state that must be shared, not duplicated, across
+    /// every handler invocation.
+    pub permission_cache: Arc<crate::permissions::PermissionCache>,
 }
 
 impl FromRef<AppState> for PrometheusHandle {

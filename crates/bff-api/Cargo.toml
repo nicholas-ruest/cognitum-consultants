@@ -21,7 +21,9 @@ auth = { path = "../auth", features = ["dev-auth"] }
 persistence = { path = "../persistence" }
 config = { path = "../config" }
 axum.workspace = true
-tokio.workspace = true
+# `permissions::PermissionCache` (PROMPT-15) needs `tokio::sync::RwLock`
+# for concurrent per-consultant cache access across request handlers.
+tokio = { workspace = true, features = ["sync"] }
 serde_json = "1.0.150"
 tracing.workspace = true
 uuid.workspace = true
@@ -32,7 +34,17 @@ metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 opentelemetry = "0.32.0"
 axum-extra = { version = "0.12.6", features = ["cookie"] }
+# `permissions::PermissionCache` TTL math (PROMPT-15) and the
+# `_permission-check-example` route's query-param struct need
+# `DateTime<Utc>`/`Duration` and `serde::Deserialize` respectively. Version
+# matches `nexus-client`'s chrono choice so `PermissionAssertion::expires_at`
+# round-trips cleanly across the crate boundary.
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 # ADR-013 layer 3 / ADR-010: Postgres-backed integration tests via testcontainers.
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
+# `permissions` unit tests (PROMPT-15) implement a mock `ArmorGateway` test
+# double, which — like `nexus-client`'s own trait — is `#[async_trait]`.
+async-trait = "0.1"
