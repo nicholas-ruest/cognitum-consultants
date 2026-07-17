@@ -7,7 +7,16 @@ publish.workspace = true
 [dependencies]
 bff-core = { path = "../bff-core" }
 nexus-client = { path = "../nexus-client" }
-auth = { path = "../auth" }
+# TODO(PROMPT-11/ADR-008): `dev-auth` is enabled directly (not forwarded
+# through a `bff-api` feature flag) because no real, Armor-backed
+# `SessionProvider` exists yet — `bff-api::AppState` has nothing else to
+# construct as its `SessionProvider` today, so a toggle would just fail to
+# compile with the feature off. Once U11 lands a real provider, this should
+# become conditional (either a `bff-api` feature that picks which provider
+# `main.rs` constructs, or a runtime switch on `Config::is_dev()`), and the
+# `/api/login/dev` route + `AppState::dev_session_provider` field below
+# should be gated the same way.
+auth = { path = "../auth", features = ["dev-auth"] }
 persistence = { path = "../persistence" }
 config = { path = "../config" }
 axum.workspace = true
@@ -21,6 +30,7 @@ opentelemetry_sdk = { version = "0.32.1", features = ["trace"] }
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 opentelemetry = "0.32.0"
+axum-extra = { version = "0.12.6", features = ["cookie"] }
 
 [dev-dependencies]
 # ADR-013 layer 3 / ADR-010: Postgres-backed integration tests via testcontainers.

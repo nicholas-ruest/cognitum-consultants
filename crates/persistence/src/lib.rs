@@ -11,6 +11,11 @@ use std::time::Duration;
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
+/// Re-exported so downstream crates (e.g. `bff-api`'s `AppState`, U11) can
+/// name the pool type returned by [`create_pool`] without taking their own
+/// direct dependency on `sqlx` just for this one type.
+pub use sqlx::postgres::PgPool as Pool;
+
 /// Default maximum number of pooled connections.
 ///
 /// ADR-010 does not pin a specific pool size; this is a conservative
