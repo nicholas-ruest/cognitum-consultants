@@ -275,6 +275,19 @@ mod tests {
         }
     }
 
+    struct UnusedEduGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::EduGateway for UnusedEduGateway {
+        async fn request_learning_catalog(
+            &self,
+            _consultant_id: &str,
+            _filters: Option<&[String]>,
+        ) -> Result<Vec<nexus_client::LearningSnapshot>, nexus_client::EduGatewayError> {
+            unimplemented!("notifications_sse tests never call the edu gateway")
+        }
+    }
+
     fn dev_config() -> config::Config {
         config::Config {
             database_url: "postgres://localhost:5432/test".to_owned(),
@@ -314,6 +327,7 @@ mod tests {
             sales_command_gateway: Arc::new(UnusedSalesGateway),
             commit_query_gateway: Arc::new(UnusedCommitGateway),
             commit_command_gateway: Arc::new(UnusedCommitGateway),
+            edu_gateway: Arc::new(UnusedEduGateway),
             workflow_session_repository: Arc::new(persistence::PgWorkflowSessionRepository::new(pool.clone())),
             notification_repository,
             action_queue_repository,

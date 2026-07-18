@@ -315,6 +315,21 @@ mod tests {
         }
     }
 
+    /// Stub `EduGateway` for dashboard tests, same rationale as
+    /// `UnusedCommitGateway` above (PROMPT-35).
+    struct UnusedEduGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::EduGateway for UnusedEduGateway {
+        async fn request_learning_catalog(
+            &self,
+            _consultant_id: &str,
+            _filters: Option<&[String]>,
+        ) -> Result<Vec<nexus_client::LearningSnapshot>, nexus_client::EduGatewayError> {
+            unimplemented!("dashboard tests never call the edu gateway")
+        }
+    }
+
     async fn migrated_pool() -> (persistence::Pool, testcontainers_modules::testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.expect("failed to start postgres container");
         let host = container.get_host().await.expect("failed to resolve container host");
@@ -376,6 +391,7 @@ mod tests {
             sales_command_gateway: Arc::new(UnusedSalesGateway),
             commit_query_gateway: Arc::new(UnusedCommitGateway),
             commit_command_gateway: Arc::new(UnusedCommitGateway),
+            edu_gateway: Arc::new(UnusedEduGateway),
             workflow_session_repository,
             notification_repository,
             action_queue_repository,

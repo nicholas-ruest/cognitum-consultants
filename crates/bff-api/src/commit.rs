@@ -328,6 +328,19 @@ mod tests {
         }
     }
 
+    struct UnusedEduGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::EduGateway for UnusedEduGateway {
+        async fn request_learning_catalog(
+            &self,
+            _consultant_id: &str,
+            _filters: Option<&[String]>,
+        ) -> Result<Vec<nexus_client::LearningSnapshot>, nexus_client::EduGatewayError> {
+            unimplemented!("commit tests never call the edu gateway")
+        }
+    }
+
     enum Outcome<T> {
         Ok(T),
         Err,
@@ -465,6 +478,7 @@ mod tests {
             sales_command_gateway: Arc::new(UnusedSalesGateway),
             commit_query_gateway,
             commit_command_gateway,
+            edu_gateway: Arc::new(UnusedEduGateway),
             workflow_session_repository,
             notification_repository,
             action_queue_repository,

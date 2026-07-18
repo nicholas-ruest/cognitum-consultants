@@ -134,8 +134,28 @@ pub enum EventClassification {
 ///   steps with the client) — the same "acknowledgment implies a required
 ///   response" reasoning `collaboration_request_acknowledged` was already
 ///   added under, not a generic informational update.
-const ACTION_EVENT_TYPES: &[&str] =
-    &["task_assigned", "collaboration_request_acknowledged", "proposal_accepted"];
+///
+/// # PROMPT-35 (Edu ACL) additions: `training_requirement_due` only
+/// Edu's three inbound events (`anti-corruption-layers.md` §3:
+/// `CourseCompleted`, `CertificationIssued`, `TrainingRequirementDue`) were
+/// each individually judged the same way Commit's were:
+/// - `CourseCompleted` -> **notification**. A completion is a confirmation
+///   of something the consultant already did, not a prompt to now go do
+///   something else.
+/// - `CertificationIssued` -> **notification**. Same reasoning: it reports
+///   an outcome, it does not itself demand a next step.
+/// - `TrainingRequirementDue` -> **action** (added to this list). Unlike a
+///   completion/issuance receipt, a due (or approaching-due) training
+///   requirement concretely names something the consultant must now go do
+///   — the same "names one concrete action" reasoning `task_assigned`'s
+///   own doc comment above already establishes, not a generic status
+///   update.
+const ACTION_EVENT_TYPES: &[&str] = &[
+    "task_assigned",
+    "collaboration_request_acknowledged",
+    "proposal_accepted",
+    "training_requirement_due",
+];
 
 /// Normalizes an `event_type` for matching against [`ACTION_EVENT_TYPES`]:
 /// lowercases and strips non-alphanumeric separators, so `"task_assigned"`,
@@ -854,6 +874,62 @@ mod tests {
         assert_eq!(classify("ProposalCreated"), EventClassification::Notification);
         assert_eq!(classify("proposal_status_changed"), EventClassification::Notification);
         assert_eq!(classify("ProposalStatusChanged"), EventClassification::Notification);
+    }
+
+    // --- Edu events as real concrete test cases (PROMPT-35) ---------------
+
+    /// `CourseCompleted`/`CertificationIssued` (informational) and
+    /// `TrainingRequirementDue` (action-implying, per `ACTION_EVENT_TYPES`'s
+    /// PROMPT-35 doc comment) — used as the real Edu events PROMPT-35 asks
+    /// to be classified against, matching
+    /// `commit_events_are_classified_and_ingested_as_documented`'s shape for
+    /// Commit above.
+    #[tokio::test]
+    async fn edu_events_are_classified_and_ingested_as_documented() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+        let bus = EventBus::new(16);
+
+        let mut course_completed = event("cc-1", "course_completed");
+        course_completed.origin_capability = "edu".to_string();
+        let mut certification_issued = event("ci-1", "certification_issued");
+        certification_issued.origin_capability = "edu".to_string();
+        let mut training_requirement_due = event("trd-1", "training_requirement_due");
+        training_requirement_due.origin_capability = "edu".to_string();
+
+        let result = ingest_events(
+            vec![course_completed.clone(), certification_issued.clone(), training_requirement_due.clone()],
+            &notification_repo,
+            &action_repo,
+            &bus,
+        )
+        .await;
+
+        assert_eq!(result.inserted(), 3);
+        assert_eq!(result.rejected(), 0);
+
+        let notifications = notification_repo.rows.lock().unwrap();
+        assert_eq!(notifications.len(), 2, "CourseCompleted and CertificationIssued are informational");
+        assert!(notifications.contains_key(&("edu".to_string(), "cc-1".to_string())));
+        assert!(notifications.contains_key(&("edu".to_string(), "ci-1".to_string())));
+
+        let actions = action_repo.rows.lock().unwrap();
+        assert_eq!(actions.len(), 1, "TrainingRequirementDue implies required follow-up work");
+        assert!(actions.contains_key(&("edu".to_string(), "trd-1".to_string())));
+    }
+
+    #[test]
+    fn classify_matches_training_requirement_due_regardless_of_casing() {
+        assert_eq!(classify("training_requirement_due"), EventClassification::Action);
+        assert_eq!(classify("TrainingRequirementDue"), EventClassification::Action);
+    }
+
+    #[test]
+    fn classify_routes_course_completed_and_certification_issued_to_notification() {
+        assert_eq!(classify("course_completed"), EventClassification::Notification);
+        assert_eq!(classify("CourseCompleted"), EventClassification::Notification);
+        assert_eq!(classify("certification_issued"), EventClassification::Notification);
+        assert_eq!(classify("CertificationIssued"), EventClassification::Notification);
     }
 
     // --- construction -----------------------------------------------------

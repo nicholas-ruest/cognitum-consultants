@@ -1,6 +1,7 @@
 mod commit;
 mod correlation;
 mod dashboard;
+mod edu;
 mod event_ingestion;
 mod event_notify_bridge;
 mod health;
@@ -130,6 +131,23 @@ async fn main() {
     let commit_command_gateway: Arc<dyn nexus_client::CommitGateway> =
         Arc::new(nexus_client::NexusCommitGateway::new(commit_command_transport));
 
+    // Edu ACL gateway (ADR-016, PROMPT-35): a single instance, unlike
+    // Sales/Commit's two-instance split — Edu has no side-effecting
+    // outbound command to isolate a retry-safe read from (see
+    // `edu`/`nexus_client::edu` module docs). `request_learning_catalog`
+    // gets the extended read timeout (PROMPT-35's explicit "longer
+    // timeout") wrapped in `RetryingTransport`, since it is an idempotent
+    // query with no synchronous UI-blocking call sharing this gateway.
+    let edu_base_transport = nexus_client::ReqwestNexusTransport::new(&cfg.nexus_endpoint_url)
+        .unwrap_or_else(|err| panic!("invalid nexus_endpoint_url {:?}: {err}", cfg.nexus_endpoint_url));
+    let edu_timeout_transport = nexus_client::TimeoutTransport::new(
+        Arc::new(edu_base_transport),
+        nexus_client::DEFAULT_EXTENDED_READ_TIMEOUT,
+    );
+    let edu_transport: Arc<dyn nexus_client::NexusTransport> =
+        Arc::new(nexus_client::RetryingTransport::with_default_retries(Arc::new(edu_timeout_transport)));
+    let edu_gateway: Arc<dyn nexus_client::EduGateway> = Arc::new(nexus_client::NexusEduGateway::new(edu_transport));
+
     // PROMPT-22/34, ADR-010: the Postgres-backed `CrossCapabilityWorkflowSession`
     // repository — PROMPT-22 built this, but no BFF route consumed it until
     // this unit (`workflow_sessions::workflow_sessions_router`,
@@ -220,6 +238,7 @@ async fn main() {
         sales_command_gateway,
         commit_query_gateway,
         commit_command_gateway,
+        edu_gateway,
         workflow_session_repository,
         notification_repository,
         action_queue_repository,
@@ -247,6 +266,7 @@ async fn main() {
     // /api/notifications/:id/read`, `GET /api/action-queue`, `POST
     // /api/action-queue/:id/start` — see that module's docs for why there is
     // deliberately no `.../complete` route.
+    // `edu::edu_router` adds `GET /api/edu/catalog` (PROMPT-35).
     let api_router = Router::new()
         .route("/login/dev", post(session::login_dev))
         .merge(session::protected_router(state.clone()))
@@ -254,6 +274,7 @@ async fn main() {
         .merge(dashboard::dashboard_router(state.clone()))
         .merge(sales::sales_router(state.clone()))
         .merge(commit::commit_router(state.clone()))
+        .merge(edu::edu_router(state.clone()))
         .merge(workflow_sessions::workflow_sessions_router(state.clone()))
         .merge(notifications_sse::notifications_router(state.clone()))
         .merge(notifications::notifications_write_router(state.clone()));

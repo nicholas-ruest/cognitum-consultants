@@ -17,6 +17,7 @@
 pub mod armor;
 pub mod circuit_breaker;
 pub mod commit;
+pub mod edu;
 pub mod reqwest_transport;
 pub mod retry;
 pub mod sales;
@@ -26,8 +27,9 @@ pub mod transport;
 pub use armor::{ArmorGateway, ArmorGatewayError, NexusArmorGateway, PermissionAssertion};
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakingTransport, CircuitState, SlidingWindowCircuitBreaker};
 pub use commit::{CommitGateway, CommitGatewayError, NexusCommitGateway, ProposalSummary};
+pub use edu::{EduGateway, EduGatewayError, LearningSnapshot, NexusEduGateway};
 pub use reqwest_transport::ReqwestNexusTransport;
 pub use retry::{DEFAULT_MAX_RETRIES, RetryingTransport};
 pub use sales::{AccountClaimResult, NexusSalesGateway, SalesGateway, SalesGatewayError};
-pub use timeout::{DEFAULT_READ_TIMEOUT, DEFAULT_WRITE_TIMEOUT, TimeoutTransport};
+pub use timeout::{DEFAULT_EXTENDED_READ_TIMEOUT, DEFAULT_READ_TIMEOUT, DEFAULT_WRITE_TIMEOUT, TimeoutTransport};
 pub use transport::{NexusRequest, NexusResponse, NexusTransport, NexusTransportError};

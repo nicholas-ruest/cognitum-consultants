@@ -77,11 +77,17 @@ describe('queryKeys.commit', () => {
   })
 })
 
+describe('queryKeys.edu', () => {
+  it('catalog() matches PROMPT-35 GET /api/edu/catalog shape', () => {
+    expect(queryKeys.edu.catalog('consultant-1')).toEqual(['edu', 'catalog', 'consultant-1'])
+  })
+})
+
 describe('generic capability resource()', () => {
   it('builds capability-namespaced keys for capabilities with no real routes yet', () => {
-    expect(queryKeys.edu.resource('courses', 'consultant-1')).toEqual([
-      'edu',
-      'courses',
+    expect(queryKeys.capacity.resource('skills', 'consultant-1')).toEqual([
+      'capacity',
+      'skills',
       'consultant-1',
     ])
     expect(queryKeys.legal.resource('contracts', 'consultant-1')).toEqual([
@@ -91,8 +97,8 @@ describe('generic capability resource()', () => {
     ])
   })
 
-  it('every non-sales/commit capability exposes all + resource', () => {
-    const generic = CAPABILITIES.filter((c) => c !== 'sales' && c !== 'commit')
+  it('every non-sales/commit/edu capability exposes all + resource', () => {
+    const generic = CAPABILITIES.filter((c) => c !== 'sales' && c !== 'commit' && c !== 'edu')
 
     for (const capability of generic) {
       const namespace = queryKeys[capability]

@@ -11,23 +11,21 @@
  * which is exactly the mechanism ADR-015 wires up to ADR-011's SSE-pushed
  * updates.
  *
- * Only `sales` and `commit` have concrete example keys below
- * (`conflicts`/`proposals`) — those mirror the actual reference flow in
- * `../ddd/anti-corruption-layers.md` §1 and the literal examples in
- * PROMPT-16/ADR-015. Real backend routes for Sales don't land until
- * PROMPT-24+, so even these are illustrative today, not wired to a live
- * endpoint.
+ * `sales`, `commit`, and `edu` have concrete example keys below
+ * (`conflicts`/`proposals`/`catalog`) — those mirror the actual reference
+ * flow in `../ddd/anti-corruption-layers.md` §1/§2/§3 and the literal
+ * examples in PROMPT-16/ADR-015.
  *
- * The other seven capabilities (`edu`, `capacity`, `customer`, `execution`,
+ * The other six capabilities (`capacity`, `customer`, `execution`,
  * `products`, `landscape`, `legal`) have no routes and no settled resource
- * shape yet (PROMPT-34+) — inventing named keys for them now would fabricate
+ * shape yet (PROMPT-36+) — inventing named keys for them now would fabricate
  * business meaning that doesn't exist. Instead each exposes `all` (for
  * capability-wide invalidation) and a generic `resource()` builder that
  * follows the same [capability, resource, consultantId, ...rest] shape.
  * Once a capability's real routes land, replace its `resource()` calls with
- * named, typed methods the same way `sales.conflicts` and `commit.proposals`
- * are done, and keep `resource()` around only if it's still useful for
- * ad hoc/rare lookups.
+ * named, typed methods the same way `sales.conflicts`, `commit.proposals`,
+ * and `edu.catalog` are done, and keep `resource()` around only if it's
+ * still useful for ad hoc/rare lookups.
  */
 
 export const CAPABILITIES = [
@@ -83,7 +81,8 @@ export const queryKeys = {
   },
   edu: {
     all: capabilityRoot('edu'),
-    resource: genericResource('edu'),
+    /** `GET /api/edu/catalog` (PROMPT-35) query key. */
+    catalog: (consultantId: string) => capabilityKey('edu', 'catalog', consultantId),
   },
   capacity: {
     all: capabilityRoot('capacity'),

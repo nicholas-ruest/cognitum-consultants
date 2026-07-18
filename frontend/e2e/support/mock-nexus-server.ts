@@ -18,12 +18,15 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * `http.createServer` covers with zero added dependencies.
  *
  * # Fixtures are fixed, not dynamically configurable
- * This server always grants the `"sales"` and `"commit"` capabilities (for
- * whichever `consultant_id` is asked about) and always answers a
- * company-claim check for most company names with the `active_owned_account`
- * fixture — `.plans/ddd/anti-corruption-layers.md` §1's worked example, and
- * the same fixture `crates/bff-api/src/sales.rs`'s own integration tests use
- * (`active_owned_account_fixture()`).
+ * This server always grants the `"sales"`, `"commit"`, and `"edu"`
+ * capabilities (for whichever `consultant_id` is asked about) and always
+ * answers a company-claim check for most company names with the
+ * `active_owned_account` fixture — `.plans/ddd/anti-corruption-layers.md`
+ * §1's worked example, and the same fixture `crates/bff-api/src/sales.rs`'s
+ * own integration tests use (`active_owned_account_fixture()`). Edu's
+ * `GET /edu/v1/catalog` (PROMPT-35) always answers with the fixed
+ * `LEARNING_CATALOG_FIXTURE` below, matching that module's own inline doc
+ * comment.
  *
  * # One exception: the `no_match` fixture, by company name (PROMPT-34)
  * `commit-sales-deeplink.spec.ts` needs a `creation_allowed: true` result to
@@ -98,6 +101,51 @@ export interface ProposalSummary {
 }
 
 /**
+ * `LearningSnapshot` shape, mirrored from `crates/nexus-client/src/edu.rs`
+ * (PROMPT-35).
+ */
+export interface LearningSnapshot {
+  course_id: string
+  title: string
+  progress_status: string
+  certification_status: string | null
+  deep_link: string | null
+}
+
+/**
+ * Fixed `GET /edu/v1/catalog` fixture (PROMPT-35): one completed/certified
+ * course, one in-progress course with no certification, and one
+ * `not_started` course with a `required` certification (the
+ * `LearningDashboard.tsx` "Training Due" heuristic's worked example) —
+ * proving the frontend's three-section partition against more than one
+ * status combination, mirroring `ACCOUNT_CLAIM_FIXTURE`'s "fixed, not
+ * dynamically configurable" rationale above.
+ */
+const LEARNING_CATALOG_FIXTURE: LearningSnapshot[] = [
+  {
+    course_id: 'course-1',
+    title: 'Cloud Security Fundamentals',
+    progress_status: 'completed',
+    certification_status: 'issued',
+    deep_link: 'https://edu.cognitum.one/courses/course-1',
+  },
+  {
+    course_id: 'course-2',
+    title: 'Advanced Negotiation',
+    progress_status: 'in_progress',
+    certification_status: null,
+    deep_link: null,
+  },
+  {
+    course_id: 'course-3',
+    title: 'Annual Compliance Refresher',
+    progress_status: 'not_started',
+    certification_status: 'required',
+    deep_link: null,
+  },
+]
+
+/**
  * `CapabilityEventReceived` shape, mirrored from
  * `crates/bff-core/src/event_ingestion.rs` — the provisional
  * `GET events/v1/poll` contract `bff-api`'s ingestion polling loop
@@ -153,6 +201,9 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
   const proposals = new Map<string, ProposalSummary>()
   const proposalActions: RecordedCommand[] = []
   let nextProposalNumber = 1
+  // PROMPT-35: `GET /edu/v1/catalog` requests, recorded so a spec can
+  // confirm which `consultant_id` the BFF forwarded.
+  const catalogRequests: RecordedCommand[] = []
   // PROMPT-33 e2e: events queued via `POST /_test/enqueue-event` and
   // drained (returned once, then cleared) on the next `GET
   // events/v1/poll` — see `notifications-sse.spec.ts`. Draining, not
@@ -185,6 +236,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
         assertions: [
           { consultant_id: consultantId, capability: 'sales', scope: 'default', expires_at: expiresAt },
           { consultant_id: consultantId, capability: 'commit', scope: 'default', expires_at: expiresAt },
+          { consultant_id: consultantId, capability: 'edu', scope: 'default', expires_at: expiresAt },
         ],
       })
       return
@@ -250,6 +302,22 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    // Edu learning-catalog query (ADR-016, PROMPT-35): always answers with
+    // the fixed `LEARNING_CATALOG_FIXTURE`, matching
+    // `crates/nexus-client/src/edu.rs`'s `LearningCatalogEnvelope`
+    // (`{"snapshots": [...]}`) convention. `consultant_id` is recorded so a
+    // spec can assert the BFF forwarded the authenticated consultant, the
+    // same shape `_test/proposals` proves for Commit.
+    if (method === 'GET' && url.pathname === '/edu/v1/catalog') {
+      catalogRequests.push({
+        path: url.pathname,
+        body: { consultant_id: url.searchParams.get('consultant_id') },
+        receivedAt: new Date().toISOString(),
+      })
+      sendJson(response, 200, { snapshots: LEARNING_CATALOG_FIXTURE })
+      return
+    }
+
     // Events poll (PROMPT-30/PROMPT-33): `bff-api`'s ingestion polling loop
     // (`crates/bff-api/src/event_ingestion.rs`) expects a bare JSON array
     // of `CapabilityEventReceived`. Drains whatever `_test/enqueue-event`
@@ -284,6 +352,11 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    if (method === 'GET' && url.pathname === '/_test/edu-catalog-requests') {
+      sendJson(response, 200, catalogRequests)
+      return
+    }
+
     // Test-injection route (PROMPT-33): queues one `CapabilityEventReceived`
     // for the *next* `GET events/v1/poll` to pick up — how
     // `notifications-sse.spec.ts` drives a real Nexus->ingestion->NOTIFY/
@@ -301,6 +374,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       queuedEvents = []
       proposals.clear()
       proposalActions.length = 0
+      catalogRequests.length = 0
       sendJson(response, 200, {})
       return
     }

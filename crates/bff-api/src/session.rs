@@ -106,6 +106,15 @@ pub struct AppState {
     /// [`nexus_client::CommitGateway`] trait — see `crate::commit` module
     /// docs.
     pub commit_command_gateway: Arc<dyn nexus_client::CommitGateway>,
+    /// Edu ACL gateway (ADR-016, PROMPT-35) used for
+    /// `EduGateway::request_learning_catalog`. Unlike
+    /// [`Self::sales_query_gateway`]/[`Self::commit_query_gateway`], there
+    /// is no matching `edu_command_gateway` — Edu has no side-effecting
+    /// outbound command (`anti-corruption-layers.md` §3), so a single
+    /// `Arc<dyn ...>` instance, retry-wrapped over the ADR-016 extended-read
+    /// timeout budget, safely serves the whole trait. See
+    /// `crate::edu`/`nexus_client::edu` module docs.
+    pub edu_gateway: Arc<dyn nexus_client::EduGateway>,
     /// Repository for [`bff_core::CrossCapabilityWorkflowSession`]
     /// (PROMPT-22/34, ADR-010). PROMPT-22 only built the aggregate +
     /// repository; PROMPT-34 is the first real BFF consumer
