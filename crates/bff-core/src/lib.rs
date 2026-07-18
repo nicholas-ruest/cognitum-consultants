@@ -6,9 +6,14 @@
 //! [`ConsultantPreferencesRepository`]) against the ADR-010 datastore.
 
 mod consultant_preferences;
+mod dashboard_configuration;
 mod preference_key;
 
 pub use consultant_preferences::{
     ConsultantPreferences, ConsultantPreferencesError, ConsultantPreferencesRepository, RepoError,
+};
+pub use dashboard_configuration::{
+    CardPlacement, DashboardConfiguration, DashboardConfigurationError,
+    DashboardConfigurationRepository, DEFAULT_CARD_MODULE_IDS,
 };
 pub use preference_key::{ParsePreferenceKeyError, PreferenceKey};

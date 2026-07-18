@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT module_id, card_position\n            FROM card_placements\n            WHERE consultant_id = $1\n            ORDER BY card_position\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "module_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "card_placements",
+            "name": "module_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "card_position",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "card_placements",
+            "name": "card_position"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "68696d115dd524d2711bb50fe6ab476871b275b73a89102104953b164835865a"
+}

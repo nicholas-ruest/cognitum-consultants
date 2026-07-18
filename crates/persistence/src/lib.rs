@@ -8,8 +8,10 @@
 //! for the local-dev / CI migration and offline-query-check workflow.
 
 mod consultant_preferences_repository;
+mod dashboard_configuration_repository;
 
 pub use consultant_preferences_repository::PgConsultantPreferencesRepository;
+pub use dashboard_configuration_repository::PgDashboardConfigurationRepository;
 
 use std::time::Duration;
 

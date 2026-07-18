@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT consultant_id FROM dashboard_configurations WHERE consultant_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "consultant_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "dashboard_configurations",
+            "name": "consultant_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2a4299b0ed3913a8e5af2ff12a40e61bc34910b8969dba5dcaa57286f74a0e77"
+}

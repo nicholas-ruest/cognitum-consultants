@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM card_placements WHERE consultant_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "23ae005a5d777afe3e9e7cf10e85c5f0946c729a77e2d604420f1f904b12002d"
+}
