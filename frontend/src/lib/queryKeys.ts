@@ -133,3 +133,28 @@ export const queryKeys = {
 export function dashboardQueryKey(consultantId: string) {
   return ['dashboard', consultantId] as const
 }
+
+/**
+ * `GET /api/notifications` (PROMPT-33) query key: `['notifications', consultantId]`.
+ *
+ * Same "cross-cutting BFF aggregate, not a `features/<capability>` resource"
+ * rationale as {@link dashboardQueryKey} above — `NotificationItem` is the
+ * Notification & Action Queue context's own aggregate
+ * (`consultant-experience-context.md` §2.2), sourced from events that
+ * originate across every capability, not owned by any single one of the
+ * nine `queryKeys` capability slots. ADR-011/ADR-015: this is exactly the
+ * key `useNotificationStream`'s SSE handler invalidates on every pushed
+ * event, so `useNotificationsQuery` re-fetches.
+ */
+export function notificationsQueryKey(consultantId: string) {
+  return ['notifications', consultantId] as const
+}
+
+/**
+ * `GET /api/action-queue` (PROMPT-33) query key: `['action-queue', consultantId]`.
+ * Same rationale as {@link notificationsQueryKey} above, for
+ * `ActionQueueEntry` instead of `NotificationItem`.
+ */
+export function actionQueueQueryKey(consultantId: string) {
+  return ['action-queue', consultantId] as const
+}

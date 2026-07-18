@@ -34,6 +34,15 @@ function mockFetch(cards: MockCard[]) {
       }
     }
 
+    // PROMPT-33: `DashboardPage` now always renders `NotificationCentre`/
+    // `ActionQueue`, each firing its own `GET` on mount — stubbed empty
+    // here since this test suite is about the `GET /api/dashboard`-driven
+    // cards, not notification/action-queue content (covered by those
+    // components' own test files).
+    if (url === '/api/notifications' || url === '/api/action-queue') {
+      return { ok: true, status: 200, json: async () => [] }
+    }
+
     throw new Error(`unexpected fetch call: ${url}`)
   })
 }

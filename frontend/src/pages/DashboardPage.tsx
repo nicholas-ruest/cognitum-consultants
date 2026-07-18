@@ -3,9 +3,12 @@ import { CardGrid } from '../components/CardGrid'
 import { Header } from '../components/Header'
 import { Layout } from '../components/Layout'
 import { navItemsFromAssertions, Sidebar } from '../components/Sidebar'
+import { ActionQueue } from '../features/notifications/ActionQueue'
+import { NotificationCentre } from '../features/notifications/NotificationCentre'
 import { LeadConflictCheck } from '../features/sales/LeadConflictCheck'
 import type { SessionState } from '../lib/SessionContext'
 import { useDashboardQuery } from '../lib/useDashboardQuery'
+import { useNotificationStream } from '../lib/useNotificationStream'
 
 export interface DashboardPageProps {
   /** Narrowed by the caller (`App.tsx`) to the authenticated variant only — this page has nothing to render without a `consultantId`. */
@@ -26,8 +29,26 @@ export interface DashboardPageProps {
  * exist yet (PROMPT-34+). Keeps the PROMPT-18 "You are logged in as ..." line too
  * (this unit's "replace or keep both" choice: keep both) since it's cheap,
  * still true, and no acceptance criterion asks for its removal.
+ *
+ * # PROMPT-33 placement: two fixed dashboard cards, not a sidebar/modal
+ * `NotificationCentre`/`ActionQueue` are rendered as two additional
+ * `Card`s prepended to the `CardGrid`, alongside — not inside — the
+ * `GET /api/dashboard`-driven cards. Chosen over a persistent
+ * sidebar/header slot (the prompt's other named option) because this page
+ * already has exactly one shell-composition point (`DashboardPage` itself,
+ * per this component's own doc comment above) and exactly one layout
+ * primitive for "a titled box of content" (`Card`/`CardGrid`, PROMPT-17) —
+ * adding a *second* layout mechanism (a fixed sidebar panel) for just these
+ * two features would be a bigger structural change for no behavioral gain,
+ * since a dashboard card is just as persistently visible on this page as a
+ * sidebar slot would be. `useNotificationStream()` is called once here,
+ * unconditionally for the page (not per-card), so exactly one `EventSource`
+ * connection exists per authenticated session regardless of how many cards
+ * end up rendered.
  */
 export function DashboardPage({ session }: DashboardPageProps) {
+  useNotificationStream()
+
   const { data, isPending, isError } = useDashboardQuery()
   const cards = data?.cards ?? []
 
@@ -40,21 +61,32 @@ export function DashboardPage({ session }: DashboardPageProps) {
       <p className="p-4 text-sm text-gray-700">You are logged in as {session.consultantId}</p>
 
       <div className="p-4">
-        {isPending ? <p className="text-sm text-gray-500">Loading dashboard…</p> : null}
-        {isError ? <p className="text-sm text-red-600">Failed to load your dashboard.</p> : null}
+        <CardGrid>
+          <Card title="Notifications">
+            <NotificationCentre />
+          </Card>
+          <Card title="Action Queue">
+            <ActionQueue />
+          </Card>
+        </CardGrid>
+
+        {isPending ? <p className="mt-4 text-sm text-gray-500">Loading dashboard…</p> : null}
+        {isError ? <p className="mt-4 text-sm text-red-600">Failed to load your dashboard.</p> : null}
 
         {!isPending && !isError ? (
-          <CardGrid>
-            {cards.map((card) => (
-              <Card key={card.module_id} title={capitalize(card.module_id)}>
-                {card.module_id === 'sales' ? (
-                  <LeadConflictCheck />
-                ) : (
-                  <p className="text-xs text-gray-500">no live data yet</p>
-                )}
-              </Card>
-            ))}
-          </CardGrid>
+          <div className="mt-4">
+            <CardGrid>
+              {cards.map((card) => (
+                <Card key={card.module_id} title={capitalize(card.module_id)}>
+                  {card.module_id === 'sales' ? (
+                    <LeadConflictCheck />
+                  ) : (
+                    <p className="text-xs text-gray-500">no live data yet</p>
+                  )}
+                </Card>
+              ))}
+            </CardGrid>
+          </div>
         ) : null}
       </div>
     </Layout>

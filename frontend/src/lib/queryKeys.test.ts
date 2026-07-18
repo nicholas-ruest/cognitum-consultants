@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { CAPABILITIES, capabilityKey, dashboardQueryKey, queryKeys } from './queryKeys'
+import {
+  actionQueueQueryKey,
+  CAPABILITIES,
+  capabilityKey,
+  dashboardQueryKey,
+  notificationsQueryKey,
+  queryKeys,
+} from './queryKeys'
 
 // ADR-015 / PROMPT-16: pure tests for the query-key builder convention —
 // no network needed. Assert shapes are correct (capability-namespaced,
@@ -110,5 +117,25 @@ describe('dashboardQueryKey', () => {
 
   it('scopes different consultants to different keys', () => {
     expect(dashboardQueryKey('consultant-1')).not.toEqual(dashboardQueryKey('consultant-2'))
+  })
+})
+
+describe('notificationsQueryKey', () => {
+  it('builds a [notifications, consultantId] tuple, not namespaced under any capability', () => {
+    expect(notificationsQueryKey('consultant-1')).toEqual(['notifications', 'consultant-1'])
+  })
+
+  it('scopes different consultants to different keys', () => {
+    expect(notificationsQueryKey('consultant-1')).not.toEqual(notificationsQueryKey('consultant-2'))
+  })
+})
+
+describe('actionQueueQueryKey', () => {
+  it('builds an [action-queue, consultantId] tuple, not namespaced under any capability', () => {
+    expect(actionQueueQueryKey('consultant-1')).toEqual(['action-queue', 'consultant-1'])
+  })
+
+  it('scopes different consultants to different keys', () => {
+    expect(actionQueueQueryKey('consultant-1')).not.toEqual(actionQueueQueryKey('consultant-2'))
   })
 })

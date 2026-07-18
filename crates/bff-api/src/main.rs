@@ -4,6 +4,7 @@ mod event_ingestion;
 mod event_notify_bridge;
 mod health;
 mod metrics;
+mod notifications;
 mod notifications_sse;
 mod permissions;
 mod sales;
@@ -206,13 +207,20 @@ async fn main() {
     // `event_bus` instance the LISTEN bridge task above republishes into
     // (PROMPT-32, ADR-014) — the polling task no longer publishes to it
     // directly, see the comments above both background tasks.
+    // `notifications::notifications_write_router` adds the write-side REST
+    // endpoints ADR-011 calls out as ordinary request/response calls
+    // (PROMPT-33): `GET /api/notifications`, `PATCH
+    // /api/notifications/:id/read`, `GET /api/action-queue`, `POST
+    // /api/action-queue/:id/start` — see that module's docs for why there is
+    // deliberately no `.../complete` route.
     let api_router = Router::new()
         .route("/login/dev", post(session::login_dev))
         .merge(session::protected_router(state.clone()))
         .merge(permissions::diagnostic_router(state.clone()))
         .merge(dashboard::dashboard_router(state.clone()))
         .merge(sales::sales_router(state.clone()))
-        .merge(notifications_sse::notifications_router(state.clone()));
+        .merge(notifications_sse::notifications_router(state.clone()))
+        .merge(notifications::notifications_write_router(state.clone()));
 
     let mut app = Router::new()
         .route("/healthz", get(health::healthz))
