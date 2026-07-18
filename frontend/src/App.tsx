@@ -1,6 +1,6 @@
 import { Header } from './components/Header'
 import { Layout } from './components/Layout'
-import { Sidebar } from './components/Sidebar'
+import { navItemsFromAssertions, Sidebar } from './components/Sidebar'
 import { SessionProvider, useSession } from './lib/SessionContext'
 import { LoginPage } from './pages/LoginPage'
 
@@ -37,7 +37,7 @@ function AppShell() {
   }
 
   return (
-    <Layout sidebar={<Sidebar items={[]} />}>
+    <Layout sidebar={<Sidebar items={navItemsFromAssertions(session.permissionAssertions)} />}>
       <Header
         title="Cognitum Consultants"
         rightSlot={<span className="text-sm text-gray-600">{session.consultantId}</span>}

@@ -1,7 +1,24 @@
 import { useQuery } from '@tanstack/react-query'
 
+/**
+ * Mirrors `crates/nexus-client/src/armor.rs`'s `PermissionAssertion` (and
+ * `crates/bff-api/src/session.rs`'s re-serving of it verbatim in
+ * `GET /api/session`) — a single Armor-granted capability grant, never the
+ * underlying authorization policy itself (ADR-009).
+ */
+export interface PermissionAssertion {
+  consultant_id: string
+  capability: string
+  scope: string
+  expires_at: string
+}
+
 export interface SessionResponse {
   consultant_id: string
+  /** ADR-009, PROMPT-19 — see `components/Sidebar.tsx`'s `navItemsFromAssertions`
+   * for the UX-only-never-enforcement framing that applies to any use of
+   * this field. */
+  permission_assertions: PermissionAssertion[]
 }
 
 /**

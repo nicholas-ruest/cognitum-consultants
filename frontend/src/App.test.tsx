@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 
@@ -65,5 +65,60 @@ describe('App', () => {
       ).toBeInTheDocument()
     })
     expect(screen.getByRole('heading', { name: 'Cognitum Consultants' })).toBeInTheDocument()
+  })
+
+  // PROMPT-19 (ADR-009): the sidebar's nav items are built from
+  // `GET /api/session`'s `permission_assertions` field. Each case mocks a
+  // different assertion set and asserts the rendered Sidebar shows exactly
+  // the matching nav items — proving the conditional-rendering mechanism,
+  // not real navigation destinations (no per-capability pages exist yet).
+  it.each([
+    {
+      description: 'three permitted capabilities',
+      capabilities: ['sales', 'delivery', 'staffing'],
+    },
+    {
+      description: 'one permitted capability',
+      capabilities: ['sales'],
+    },
+    {
+      description: 'zero permitted capabilities',
+      capabilities: [],
+    },
+  ])('renders exactly the nav items matching $description', async ({ capabilities }) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          consultant_id: 'dev-consultant-001',
+          permission_assertions: capabilities.map((capability) => ({
+            consultant_id: 'dev-consultant-001',
+            capability,
+            scope: 'default',
+            expires_at: '2099-01-01T00:00:00Z',
+          })),
+        }),
+      }),
+    )
+
+    renderApp()
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('You are logged in as dev-consultant-001'),
+      ).toBeInTheDocument()
+    })
+
+    const nav = screen.getByRole('navigation', { name: 'Primary' })
+    const links = within(nav).queryAllByRole('link')
+
+    expect(links).toHaveLength(capabilities.length)
+    capabilities.forEach((capability) => {
+      expect(
+        within(nav).getByRole('link', { name: new RegExp(`^${capability}$`, 'i') }),
+      ).toHaveAttribute('href', `/${capability}`)
+    })
   })
 })

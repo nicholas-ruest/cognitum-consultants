@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import type { PermissionAssertion } from '../lib/useSessionQuery'
 
 /**
  * PROMPT-17 dashboard shell primitive.
@@ -13,14 +14,60 @@ import type { ReactNode } from 'react'
  * is not ported or copied from any actual manage.cognitum.one source.
  *
  * Pure presentational nav list. Deliberately takes `items` as a prop rather
- * than hardcoding any business navigation — wiring real, capability-based
- * nav items is PROMPT-19's job.
+ * than hardcoding any business navigation — [`navItemsFromAssertions`]
+ * below is what builds real, capability-based nav items (PROMPT-19).
  */
 
 export interface SidebarNavItem {
   label: string
   href: string
   icon?: ReactNode
+}
+
+/**
+ * Builds `SidebarNavItem`s from the consultant's current Permission
+ * Assertions (`GET /api/session`'s `permission_assertions`, ADR-009).
+ *
+ * ============================================================
+ * UX ONLY — THIS IS NOT AN ENFORCEMENT MECHANISM (ADR-009 layer 2 of 3)
+ * ============================================================
+ * This function decides what to *render* as a shortcut, nothing more.
+ * Omitting a nav item here just means the frontend chose not to show a
+ * link to that capability — it does NOT mean the consultant is blocked
+ * from it. A consultant (or a compromised/modified client that skips this
+ * function entirely) can still call any backend route directly, regardless
+ * of what this function produces. The real authorization checks live
+ * server-side, and only there:
+ *   - `PermissionCache`/`RequirePermission` in `bff-api` (PROMPT-15) —
+ *     short-circuits with `403` before a Nexus call is even attempted.
+ *   - The owning capability itself, downstream via Nexus/Armor — always
+ *     re-checked, never assumed satisfied by this filtering.
+ * Never write frontend logic anywhere that treats "item not rendered" as a
+ * substitute for a real `401`/`403` response.
+ *
+ * Capabilities are deduplicated — a consultant may hold more than one
+ * assertion for the same `capability` under different `scope`s, but this
+ * is a nav-*presence* decision, not a scope-aware one (no real
+ * per-capability route exists yet for scope to matter here; see
+ * `PermissionCache::is_permitted`'s "capability name only" doc comment in
+ * `crates/bff-api/src/permissions.rs`).
+ *
+ * `href` points at a stub route (`/{capability}`) since no real
+ * per-capability pages exist yet beyond the `features/` stubs — this
+ * proves the conditional-rendering *mechanism*, not real navigation
+ * destinations.
+ */
+export function navItemsFromAssertions(assertions: PermissionAssertion[]): SidebarNavItem[] {
+  const uniqueCapabilities = [...new Set(assertions.map((assertion) => assertion.capability))]
+
+  return uniqueCapabilities.map((capability) => ({
+    label: capitalize(capability),
+    href: `/${capability}`,
+  }))
+}
+
+function capitalize(value: string): string {
+  return value.length === 0 ? value : value[0].toUpperCase() + value.slice(1)
 }
 
 export interface SidebarProps {

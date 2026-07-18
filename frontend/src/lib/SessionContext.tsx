@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
 import type { ReactNode } from 'react'
+import type { PermissionAssertion, SessionResponse } from './useSessionQuery'
 import { UnauthorizedError, useSessionQuery } from './useSessionQuery'
 
 /**
@@ -14,11 +15,18 @@ import { UnauthorizedError, useSessionQuery } from './useSessionQuery'
  * not on query-internal state. A 401 (`UnauthorizedError`, see
  * `useSessionQuery.ts`) maps to `'unauthenticated'`, not `'error'` — per
  * PROMPT-18, "no session" is an expected state, not a failure to surface.
+ *
+ * PROMPT-19 (ADR-009): the authenticated variant also carries
+ * `permissionAssertions`, the consultant's current Armor-granted
+ * `PermissionAssertion` set, so `App.tsx`/`Sidebar.tsx` can build
+ * permission-aware nav without a separate query. As with every other use of
+ * this data (see `components/Sidebar.tsx`), this is UX-only — it is never
+ * an authorization decision in its own right.
  */
 export type SessionState =
   | { status: 'loading' }
   | { status: 'unauthenticated' }
-  | { status: 'authenticated'; consultantId: string }
+  | { status: 'authenticated'; consultantId: string; permissionAssertions: PermissionAssertion[] }
   | { status: 'error'; error: unknown }
 
 const SessionContext = createContext<SessionState | undefined>(undefined)
@@ -32,7 +40,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 }
 
 function toSessionState(query: {
-  data: { consultant_id: string } | undefined
+  data: SessionResponse | undefined
   isPending: boolean
   isError: boolean
   error: unknown
@@ -45,7 +53,14 @@ function toSessionState(query: {
       : { status: 'error', error: query.error }
   }
 
-  return { status: 'authenticated', consultantId: query.data.consultant_id }
+  return {
+    status: 'authenticated',
+    consultantId: query.data.consultant_id,
+    // Defensive fallback: existing mocks/callers that predate PROMPT-19
+    // may omit this field entirely; treat that as "no assertions" rather
+    // than throwing downstream in `navItemsFromAssertions`.
+    permissionAssertions: query.data.permission_assertions ?? [],
+  }
 }
 
 /** Reads the current `SessionState`. Must be called under `<SessionProvider>`. */

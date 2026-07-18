@@ -142,6 +142,37 @@ impl PermissionCache {
         }
     }
 
+    /// Returns the full current set of [`PermissionAssertion`]s cached (or
+    /// freshly fetched) for `consultant_id` — the full grant set, not a
+    /// single-capability check (ADR-009, PROMPT-19's `GET /api/session`
+    /// `permission_assertions` field, consumed client-side as a UX/
+    /// rendering-only signal — see `../../../.plans/adr/ADR-009-authorization-permission-aware-presentation.md`
+    /// layer 2; it is never itself an enforcement decision).
+    ///
+    /// Shares [`Self::get_or_refresh`] with [`Self::is_permitted`] so both
+    /// methods populate/read the same cache entries under the same TTL
+    /// rules rather than duplicating the fetch-and-cache logic.
+    ///
+    /// On a fetch failure this fails closed — returns an empty `Vec` rather
+    /// than a stale entry or a propagated error — matching `is_permitted`'s
+    /// fail-closed treatment of gateway errors. An empty result here means
+    /// "render no permission-gated nav items", never "the consultant has no
+    /// session"; that distinction is `require_session`'s job, not this
+    /// method's.
+    pub async fn assertions_for(&self, consultant_id: &str) -> Vec<PermissionAssertion> {
+        match self.get_or_refresh(consultant_id).await {
+            Ok(assertions) => assertions,
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    consultant_id,
+                    "permission assertion fetch failed; returning empty assertion set"
+                );
+                Vec::new()
+            }
+        }
+    }
+
     /// Clears any cached entry for `consultant_id`, forcing the next
     /// `is_permitted` call to re-fetch from Armor. Nothing calls this yet
     /// — see the module docs' "Forward-compatibility" section for why it
@@ -353,6 +384,52 @@ mod tests {
         assert!(cache.is_permitted("consultant-1", "sales:read").await);
 
         assert_eq!(gateway.calls(), 2, "invalidate must force the next lookup to refetch");
+    }
+
+    #[tokio::test]
+    async fn assertions_for_returns_the_full_cached_set() {
+        let gateway = Arc::new(MockArmorGateway::new(vec![
+            assertion("sales:read", Utc::now() + ChronoDuration::minutes(5)),
+            assertion("delivery:read", Utc::now() + ChronoDuration::minutes(5)),
+        ]));
+        let cache = PermissionCache::new(gateway.clone());
+
+        let assertions = cache.assertions_for("consultant-1").await;
+
+        assert_eq!(assertions.len(), 2);
+        assert!(assertions.iter().any(|a| a.capability == "sales:read"));
+        assert!(assertions.iter().any(|a| a.capability == "delivery:read"));
+    }
+
+    #[tokio::test]
+    async fn assertions_for_shares_the_cache_with_is_permitted() {
+        let gateway = Arc::new(MockArmorGateway::new(vec![assertion("sales:read", Utc::now() + ChronoDuration::minutes(5))]));
+        let cache = PermissionCache::new(gateway.clone());
+
+        assert!(cache.is_permitted("consultant-1", "sales:read").await);
+        cache.assertions_for("consultant-1").await;
+
+        assert_eq!(gateway.calls(), 1, "assertions_for must reuse is_permitted's cached entry");
+    }
+
+    #[tokio::test]
+    async fn assertions_for_returns_empty_when_the_gateway_fetch_fails() {
+        struct FailingGateway;
+
+        #[async_trait::async_trait]
+        impl ArmorGateway for FailingGateway {
+            async fn fetch_assertions(
+                &self,
+                _consultant_id: &str,
+                _credential: &str,
+            ) -> Result<Vec<PermissionAssertion>, ArmorGatewayError> {
+                Err(ArmorGatewayError::InvalidCredential("boom".to_owned()))
+            }
+        }
+
+        let cache = PermissionCache::new(Arc::new(FailingGateway));
+
+        assert!(cache.assertions_for("consultant-1").await.is_empty());
     }
 
     #[tokio::test]

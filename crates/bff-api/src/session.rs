@@ -99,12 +99,35 @@ pub async fn login_dev(
     Ok((jar.add(cookie), Json(json!({ "consultant_id": session.consultant_id }))))
 }
 
-/// `GET /api/session`: returns the authenticated consultant's identity.
-/// Only reachable once [`require_session`] has attached a `Session` to the
-/// request extensions — unauthenticated requests never reach this handler
-/// (see [`protected_router`]).
-pub async fn get_session_handler(Extension(session): Extension<Session>) -> Json<Value> {
-    Json(json!({ "consultant_id": session.consultant_id }))
+/// Response body for `GET /api/session`.
+///
+/// `permission_assertions` (ADR-009, PROMPT-19) is the consultant's current
+/// Armor-granted [`PermissionAssertion`] set, sourced from
+/// [`crate::permissions::PermissionCache`]. **This field is a UX/rendering
+/// signal only, never an enforcement mechanism** — the frontend uses it to
+/// conditionally render nav items etc. (ADR-009 layer 2), but every real
+/// mutation is independently re-authorized server-side by the owning
+/// capability (ADR-009 layer 3). A consultant whose client omits or
+/// misrepresents this field gains nothing: the BFF's own `RequirePermission`
+/// checks (layer 1) and the downstream capability's checks (layer 3) are
+/// what actually gate access, not what this response does or doesn't list.
+#[derive(serde::Serialize)]
+pub struct SessionResponse {
+    pub consultant_id: String,
+    pub permission_assertions: Vec<nexus_client::PermissionAssertion>,
+}
+
+/// `GET /api/session`: returns the authenticated consultant's identity plus
+/// their current Permission Assertions (ADR-009, PROMPT-19). Only reachable
+/// once [`require_session`] has attached a `Session` to the request
+/// extensions — unauthenticated requests never reach this handler (see
+/// [`protected_router`]).
+pub async fn get_session_handler(
+    State(state): State<AppState>,
+    Extension(session): Extension<Session>,
+) -> Json<SessionResponse> {
+    let permission_assertions = state.permission_cache.assertions_for(&session.consultant_id).await;
+    Json(SessionResponse { consultant_id: session.consultant_id, permission_assertions })
 }
 
 /// Session-lookup middleware (ADR-008): reads the session cookie, looks it

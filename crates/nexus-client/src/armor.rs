@@ -53,7 +53,14 @@ use crate::transport::{NexusRequest, NexusTransport, NexusTransportError};
 /// A grant Armor currently asserts for a consultant. Never the underlying
 /// authorization policy/rules themselves — those stay inside Armor
 /// (`anti-corruption-layers.md` §10).
-#[derive(Debug, Clone, serde::Deserialize)]
+///
+/// `Serialize` (alongside the pre-existing `Deserialize`, used to decode
+/// Armor's response body) is derived so `bff-api` can re-serve this same
+/// shape verbatim in `GET /api/session`'s `permission_assertions` field
+/// (ADR-009, PROMPT-19) without a parallel DTO — the wire shape consumed
+/// from Armor and the shape served to the frontend are intentionally
+/// identical.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PermissionAssertion {
     pub consultant_id: String,
     pub capability: String,
