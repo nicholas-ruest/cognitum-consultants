@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO action_queue_entries\n                (id, consultant_id, origin_capability, origin_event_id,\n                 title, body, deep_link, action_state, expires_at, created_at)\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)\n            ON CONFLICT (origin_capability, origin_event_id) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "96afc4cc76d020c0ef1b1e099077b5f6448e31d8c2e007a47500d2ffec824444"
+}

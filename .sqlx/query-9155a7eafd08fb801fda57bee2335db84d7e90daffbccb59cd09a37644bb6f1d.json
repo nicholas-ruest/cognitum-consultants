@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE action_queue_entries\n            SET action_state = 'completed'\n            WHERE id = $1 AND action_state = 'in_progress'\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9155a7eafd08fb801fda57bee2335db84d7e90daffbccb59cd09a37644bb6f1d"
+}

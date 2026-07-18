@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE notification_items\n            SET read_state = 'read'\n            WHERE id = $1 AND read_state = 'unread'\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c86ed0770f2778d3012e2e1be7f0afaa65f70c9c113d1d93ea6b0d4746e775cf"
+}

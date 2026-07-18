@@ -25,6 +25,17 @@ key, and `(consultant_id, status)` is indexed to support
 `expire_older_than` housekeeping sweep. See the migration's own comments
 for the full rationale.
 
+`20260718022630_notification_items.{up,down}.sql` (U29/PROMPT-29) creates
+`notification_items` for `bff_core::NotificationItem`, and
+`20260718022631_action_queue_entries.{up,down}.sql` (also U29/PROMPT-29)
+creates `action_queue_entries` for `bff_core::ActionQueueEntry`
+(`../../../.plans/ddd/consultant-experience-context.md` §2.2). Both tables
+carry a `UNIQUE (origin_capability, origin_event_id)` constraint — the
+real, DB-native backing for the idempotent-ingestion invariant explicitly
+called out in the DDD doc (ADR-010). See the migrations' own comments and
+`notification_repository.rs`/`action_queue_entry_repository.rs` for why
+`save` uses `ON CONFLICT ... DO NOTHING` rather than `DO UPDATE`.
+
 This README file also exists so git tracks this directory even when a
 migration set is otherwise removed; it is not itself a migration and `sqlx
 migrate run` ignores it (only `*.sql` files matter to the migrator).

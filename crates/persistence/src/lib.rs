@@ -7,12 +7,16 @@
 //! (`.plans/ddd/consultant-experience-context.md` §1.4). See `README.md`
 //! for the local-dev / CI migration and offline-query-check workflow.
 
+mod action_queue_entry_repository;
 mod consultant_preferences_repository;
 mod dashboard_configuration_repository;
+mod notification_repository;
 mod workflow_session_repository;
 
+pub use action_queue_entry_repository::PgActionQueueRepository;
 pub use consultant_preferences_repository::PgConsultantPreferencesRepository;
 pub use dashboard_configuration_repository::PgDashboardConfigurationRepository;
+pub use notification_repository::PgNotificationRepository;
 pub use workflow_session_repository::PgWorkflowSessionRepository;
 
 use std::time::Duration;

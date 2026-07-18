@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE action_queue_entries\n            SET action_state = 'expired'\n            WHERE action_state NOT IN ('completed', 'expired')\n              AND expires_at < $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2d875dce75c55aa4b3b327bba3711aec7de297b220e5d331214bd535ea26941b"
+}
