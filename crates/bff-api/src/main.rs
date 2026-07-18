@@ -9,6 +9,7 @@ mod event_notify_bridge;
 mod execution;
 mod health;
 mod landscape;
+mod legal;
 mod metrics;
 mod notifications;
 mod notifications_sse;
@@ -269,6 +270,21 @@ async fn main() {
     let landscape_command_gateway: Arc<dyn nexus_client::LandscapeGateway> =
         Arc::new(nexus_client::NexusLandscapeGateway::new(landscape_command_transport));
 
+    // Legal ACL gateway (ADR-007, PROMPT-41): a single instance, unlike
+    // Sales/Commit/Capacity/Execution/Landscape's two-instance split — Legal
+    // has no side-effecting outbound command to isolate a retry-safe read
+    // from (see `legal`/`nexus_client::legal` module docs), the same shape
+    // as Edu/Customer/Products above. `request_approved_clauses` gets the
+    // read timeout wrapped in `RetryingTransport`, since it is an idempotent
+    // query with no synchronous UI-blocking call sharing this gateway.
+    let legal_base_transport = nexus_client::ReqwestNexusTransport::new(&cfg.nexus_endpoint_url)
+        .unwrap_or_else(|err| panic!("invalid nexus_endpoint_url {:?}: {err}", cfg.nexus_endpoint_url));
+    let legal_timeout_transport =
+        nexus_client::TimeoutTransport::new(Arc::new(legal_base_transport), nexus_client::DEFAULT_READ_TIMEOUT);
+    let legal_transport: Arc<dyn nexus_client::NexusTransport> =
+        Arc::new(nexus_client::RetryingTransport::with_default_retries(Arc::new(legal_timeout_transport)));
+    let legal_gateway: Arc<dyn nexus_client::LegalGateway> = Arc::new(nexus_client::NexusLegalGateway::new(legal_transport));
+
     // PROMPT-22/34, ADR-010: the Postgres-backed `CrossCapabilityWorkflowSession`
     // repository — PROMPT-22 built this, but no BFF route consumed it until
     // this unit (`workflow_sessions::workflow_sessions_router`,
@@ -326,6 +342,7 @@ async fn main() {
         events_transport,
         notification_repository.clone(),
         action_queue_repository.clone(),
+        workflow_session_repository.clone(),
         event_notify_publisher,
         Duration::from_secs(cfg.event_poll_interval_seconds),
     ));
@@ -368,6 +385,7 @@ async fn main() {
         products_gateway,
         landscape_query_gateway,
         landscape_command_gateway,
+        legal_gateway,
         workflow_session_repository,
         notification_repository,
         action_queue_repository,
@@ -406,6 +424,10 @@ async fn main() {
     // `GET /api/products/catalog` (PROMPT-39) — see that module's docs for
     // why aggressive caching of this response lives client-side (TanStack
     // Query), not as an HTTP `Cache-Control` header here.
+    // `landscape::landscape_router` adds `GET /api/landscape/intelligence`
+    // and `POST /api/landscape/observations` (PROMPT-40). `legal::legal_router`
+    // adds `GET /api/legal/clauses` (PROMPT-41) — see that module's docs for
+    // the `proposal_id`/`topic` either/or query contract.
     let api_router = Router::new()
         .route("/login/dev", post(session::login_dev))
         .merge(session::protected_router(state.clone()))
@@ -419,6 +441,7 @@ async fn main() {
         .merge(execution::execution_router(state.clone()))
         .merge(products::products_router(state.clone()))
         .merge(landscape::landscape_router(state.clone()))
+        .merge(legal::legal_router(state.clone()))
         .merge(workflow_sessions::workflow_sessions_router(state.clone()))
         .merge(notifications_sse::notifications_router(state.clone()))
         .merge(notifications::notifications_write_router(state.clone()));

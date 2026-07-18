@@ -26,8 +26,8 @@ pub use dashboard_configuration::{
     DashboardConfigurationRepository, DEFAULT_CARD_MODULE_IDS,
 };
 pub use event_ingestion::{
-    classify, hydrate_notify_pointer, ingest_events, CapabilityEventReceived, EventBus,
-    EventClassification, EventNotifyPointer, EventPublisher, IngestedEvent, IngestionOutcome,
+    classify, filter_conservative_legal_events, hydrate_notify_pointer, ingest_events, CapabilityEventReceived,
+    EventBus, EventClassification, EventNotifyPointer, EventPublisher, IngestedEvent, IngestionOutcome,
     IngestionResult, DEFAULT_ACTION_QUEUE_ENTRY_TTL_HOURS, DEFAULT_EVENT_BUS_CAPACITY,
     EVENT_NOTIFY_CHANNEL,
 };

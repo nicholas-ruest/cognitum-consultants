@@ -50,8 +50,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bff_core::{
-    ingest_events, ActionQueueRepository, CapabilityEventReceived, EventPublisher,
-    IngestionResult, NotificationRepository,
+    filter_conservative_legal_events, ingest_events, ActionQueueRepository, CapabilityEventReceived, EventPublisher,
+    IngestionResult, NotificationRepository, WorkflowSessionRepository,
 };
 use chrono::{DateTime, Utc};
 use nexus_client::{NexusRequest, NexusTransport, NexusTransportError};
@@ -114,14 +114,22 @@ async fn fetch_events(
 }
 
 /// Runs exactly one poll-and-ingest cycle: fetches whatever batch of
-/// [`CapabilityEventReceived`] envelopes Nexus returns for `since`, and
-/// hands it to [`ingest_events`]. Exposed separately from
+/// [`CapabilityEventReceived`] envelopes Nexus returns for `since`, applies
+/// [`filter_conservative_legal_events`] (PROMPT-41 — a no-op for every event
+/// that isn't a `LegalClauseUpdated`, see that function's doc comment), and
+/// hands the result to [`ingest_events`]. Exposed separately from
 /// [`run_polling_loop`] so tests (and any future manual/one-shot trigger)
 /// can drive a single cycle deterministically.
+///
+/// `events_fetched`/`cursor` are computed from the *raw*, pre-filter batch —
+/// the filter only decides what gets surfaced as a notification, it must
+/// not affect the polling cursor's "how far has this loop actually read
+/// from Nexus" bookkeeping (module docs, dedup layer 1 vs. layer 2).
 pub async fn poll_once(
     transport: &dyn NexusTransport,
     notification_repo: &dyn NotificationRepository,
     action_queue_repo: &dyn ActionQueueRepository,
+    workflow_session_repo: &dyn WorkflowSessionRepository,
     publisher: &dyn EventPublisher,
     since: Option<DateTime<Utc>>,
 ) -> Result<PollOutcome, PollError> {
@@ -129,6 +137,7 @@ pub async fn poll_once(
     let events_fetched = events.len();
     let cursor = events.iter().map(|event| event.received_at).max().or(since);
 
+    let events = filter_conservative_legal_events(events, workflow_session_repo).await;
     let ingestion = ingest_events(events, notification_repo, action_queue_repo, publisher).await;
 
     Ok(PollOutcome { events_fetched, ingestion, cursor })
@@ -154,14 +163,22 @@ pub async fn run_polling_loop(
     transport: Arc<dyn NexusTransport>,
     notification_repo: Arc<dyn NotificationRepository>,
     action_queue_repo: Arc<dyn ActionQueueRepository>,
+    workflow_session_repo: Arc<dyn WorkflowSessionRepository>,
     publisher: Arc<dyn EventPublisher>,
     interval: Duration,
 ) -> ! {
     let mut cursor: Option<DateTime<Utc>> = None;
 
     loop {
-        match poll_once(transport.as_ref(), notification_repo.as_ref(), action_queue_repo.as_ref(), publisher.as_ref(), cursor)
-            .await
+        match poll_once(
+            transport.as_ref(),
+            notification_repo.as_ref(),
+            action_queue_repo.as_ref(),
+            workflow_session_repo.as_ref(),
+            publisher.as_ref(),
+            cursor,
+        )
+        .await
         {
             Ok(outcome) => {
                 cursor = outcome.cursor;
@@ -186,9 +203,9 @@ pub async fn run_polling_loop(
 mod tests {
     use std::sync::Arc;
 
-    use bff_core::{ActionQueueRepository, EventBus, NotificationRepository};
+    use bff_core::{ActionQueueRepository, EventBus, NotificationRepository, WorkflowSessionRepository};
     use nexus_client::ReqwestNexusTransport;
-    use persistence::{PgActionQueueRepository, PgNotificationRepository};
+    use persistence::{PgActionQueueRepository, PgNotificationRepository, PgWorkflowSessionRepository};
     use testcontainers_modules::postgres::Postgres;
     use testcontainers_modules::testcontainers::runners::AsyncRunner;
     use wiremock::matchers::{method, path};
@@ -244,6 +261,7 @@ mod tests {
         let (pool, _container) = migrated_pool().await;
         let notification_repo: Arc<dyn NotificationRepository> = Arc::new(PgNotificationRepository::new(pool.clone()));
         let action_queue_repo: Arc<dyn ActionQueueRepository> = Arc::new(PgActionQueueRepository::new(pool.clone()));
+        let workflow_session_repo: Arc<dyn WorkflowSessionRepository> = Arc::new(PgWorkflowSessionRepository::new(pool.clone()));
         let event_bus = EventBus::new(16);
         let mut subscription = event_bus.subscribe();
 
@@ -255,9 +273,16 @@ mod tests {
             .await;
         let transport = transport_for(&mock_server);
 
-        let first = poll_once(transport.as_ref(), notification_repo.as_ref(), action_queue_repo.as_ref(), &event_bus, None)
-            .await
-            .expect("first poll failed");
+        let first = poll_once(
+            transport.as_ref(),
+            notification_repo.as_ref(),
+            action_queue_repo.as_ref(),
+            workflow_session_repo.as_ref(),
+            &event_bus,
+            None,
+        )
+        .await
+        .expect("first poll failed");
 
         assert_eq!(first.events_fetched, 1);
         assert_eq!(first.ingestion.inserted(), 1);
@@ -268,6 +293,7 @@ mod tests {
             transport.as_ref(),
             notification_repo.as_ref(),
             action_queue_repo.as_ref(),
+            workflow_session_repo.as_ref(),
             &event_bus,
             Some(cursor_after_first),
         )
@@ -308,7 +334,8 @@ mod tests {
     async fn polling_an_empty_batch_ingests_nothing_and_preserves_the_cursor() {
         let (pool, _container) = migrated_pool().await;
         let notification_repo: Arc<dyn NotificationRepository> = Arc::new(PgNotificationRepository::new(pool.clone()));
-        let action_queue_repo: Arc<dyn ActionQueueRepository> = Arc::new(PgActionQueueRepository::new(pool));
+        let action_queue_repo: Arc<dyn ActionQueueRepository> = Arc::new(PgActionQueueRepository::new(pool.clone()));
+        let workflow_session_repo: Arc<dyn WorkflowSessionRepository> = Arc::new(PgWorkflowSessionRepository::new(pool));
         let event_bus = EventBus::new(16);
 
         let mock_server = MockServer::start().await;
@@ -320,9 +347,16 @@ mod tests {
         let transport = transport_for(&mock_server);
 
         let since: DateTime<Utc> = "2026-01-01T00:00:00Z".parse().unwrap();
-        let outcome = poll_once(transport.as_ref(), notification_repo.as_ref(), action_queue_repo.as_ref(), &event_bus, Some(since))
-            .await
-            .expect("poll failed");
+        let outcome = poll_once(
+            transport.as_ref(),
+            notification_repo.as_ref(),
+            action_queue_repo.as_ref(),
+            workflow_session_repo.as_ref(),
+            &event_bus,
+            Some(since),
+        )
+        .await
+        .expect("poll failed");
 
         assert_eq!(outcome.events_fetched, 0);
         assert_eq!(outcome.ingestion.inserted(), 0);
@@ -335,7 +369,8 @@ mod tests {
     async fn polling_a_non_success_status_is_reported_as_an_error() {
         let (pool, _container) = migrated_pool().await;
         let notification_repo: Arc<dyn NotificationRepository> = Arc::new(PgNotificationRepository::new(pool.clone()));
-        let action_queue_repo: Arc<dyn ActionQueueRepository> = Arc::new(PgActionQueueRepository::new(pool));
+        let action_queue_repo: Arc<dyn ActionQueueRepository> = Arc::new(PgActionQueueRepository::new(pool.clone()));
+        let workflow_session_repo: Arc<dyn WorkflowSessionRepository> = Arc::new(PgWorkflowSessionRepository::new(pool));
         let event_bus = EventBus::new(16);
 
         let mock_server = MockServer::start().await;
@@ -346,8 +381,15 @@ mod tests {
             .await;
         let transport = transport_for(&mock_server);
 
-        let result =
-            poll_once(transport.as_ref(), notification_repo.as_ref(), action_queue_repo.as_ref(), &event_bus, None).await;
+        let result = poll_once(
+            transport.as_ref(),
+            notification_repo.as_ref(),
+            action_queue_repo.as_ref(),
+            workflow_session_repo.as_ref(),
+            &event_bus,
+            None,
+        )
+        .await;
 
         assert!(matches!(result, Err(PollError::UnexpectedStatus { .. })));
     }

@@ -11,24 +11,12 @@
  * which is exactly the mechanism ADR-015 wires up to ADR-011's SSE-pushed
  * updates.
  *
- * `sales`, `commit`, `edu`, `capacity`, `customer`, and `execution` have
- * concrete example keys below
- * (`conflicts`/`proposals`/`catalog`/`profile`/`assigned`/`engagements`) —
- * those mirror the actual reference flow in
- * `../ddd/anti-corruption-layers.md` §1/§2/§3/§4/§5/§6 and the literal
- * examples in PROMPT-16/ADR-015.
- *
- * `legal` has no routes and no settled resource shape yet (PROMPT-41+) —
- * inventing a named key for it now would fabricate business meaning that
- * doesn't exist. It still exposes `all` (for capability-wide invalidation)
- * and a generic `resource()` builder that follows the same
- * [capability, resource, consultantId, ...rest] shape. Once its real routes
- * land, replace its `resource()` calls with named, typed methods the same
- * way `sales.conflicts`, `commit.proposals`, `edu.catalog`,
- * `capacity.profile`, `customer.assigned`, `execution.engagements`,
- * `products.catalog` (PROMPT-39), and `landscape.digest` (PROMPT-40) are
- * done, and keep `resource()` around only if it's still useful for ad
- * hoc/rare lookups.
+ * `sales`, `commit`, `edu`, `capacity`, `customer`, `execution`, `products`,
+ * `landscape`, and `legal` all have concrete example keys below
+ * (`conflicts`/`proposals`/`catalog`/`profile`/`assigned`/`engagements`/
+ * `catalog`/`digest`/`clauses`) — those mirror the actual reference flow in
+ * `../ddd/anti-corruption-layers.md` §1–§9 and the literal examples in
+ * PROMPT-16/ADR-015.
  */
 
 export const CAPABILITIES = [
@@ -63,12 +51,6 @@ export function capabilityKey<C extends Capability>(
 /** Root key for a capability, for invalidating its entire cache slice. */
 function capabilityRoot<C extends Capability>(capability: C) {
   return [capability] as const
-}
-
-/** Generic per-capability builder for capabilities with no settled routes yet. */
-function genericResource<C extends Capability>(capability: C) {
-  return (resource: string, consultantId: string, ...rest: readonly string[]) =>
-    capabilityKey(capability, resource, consultantId, ...rest)
 }
 
 export const queryKeys = {
@@ -114,7 +96,16 @@ export const queryKeys = {
   },
   legal: {
     all: capabilityRoot('legal'),
-    resource: genericResource('legal'),
+    /**
+     * `GET /api/legal/clauses` (PROMPT-41) query key. Scoped by `context`
+     * beyond `consultantId` (e.g. `proposal:proposal-1` or
+     * `topic:data-residency`) — unlike every other capability's single,
+     * page-load-scoped read above, a consultant can look up clauses for
+     * many different proposals/topics across a session, so a bare
+     * `[legal, clauses, consultantId]` key would incorrectly collapse
+     * distinct lookups into one cache entry.
+     */
+    clauses: (consultantId: string, context: string) => capabilityKey('legal', 'clauses', consultantId, context),
   },
 } as const
 

@@ -22,6 +22,7 @@ pub mod customer;
 pub mod edu;
 pub mod execution;
 pub mod landscape;
+pub mod legal;
 pub mod products;
 pub mod reqwest_transport;
 pub mod retry;
@@ -39,6 +40,7 @@ pub use execution::{EngagementSnapshot, EngagementTaskSummary, ExecutionGateway,
 pub use landscape::{
     FieldObservationSubmission, IntelligenceDigestItem, LandscapeGateway, LandscapeGatewayError, NexusLandscapeGateway,
 };
+pub use legal::{ApprovedLegalSnippet, ClauseContext, LegalGateway, LegalGatewayError, NexusLegalGateway};
 pub use products::{NexusProductsGateway, ProductReferenceCard, ProductsGateway, ProductsGatewayError};
 pub use reqwest_transport::ReqwestNexusTransport;
 pub use retry::{AGGRESSIVE_MAX_RETRIES, DEFAULT_MAX_RETRIES, RetryingTransport};

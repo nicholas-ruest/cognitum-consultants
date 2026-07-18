@@ -113,37 +113,24 @@ describe('queryKeys.landscape', () => {
   })
 })
 
-describe('generic capability resource()', () => {
-  it('builds capability-namespaced keys for capabilities with no real routes yet', () => {
-    expect(queryKeys.legal.resource('contracts', 'consultant-1')).toEqual([
+describe('queryKeys.legal', () => {
+  it('clauses() matches PROMPT-41 GET /api/legal/clauses shape, scoped by context beyond consultantId', () => {
+    expect(queryKeys.legal.clauses('consultant-1', 'proposal:proposal-1')).toEqual([
       'legal',
-      'contracts',
+      'clauses',
       'consultant-1',
+      'proposal:proposal-1',
     ])
   })
 
-  it('every non-sales/commit/edu/capacity/customer/execution/products/landscape capability exposes all + resource', () => {
-    const generic = CAPABILITIES.filter(
-      (c) =>
-        c !== 'sales' &&
-        c !== 'commit' &&
-        c !== 'edu' &&
-        c !== 'capacity' &&
-        c !== 'customer' &&
-        c !== 'execution' &&
-        c !== 'products' &&
-        c !== 'landscape',
+  it('scopes different contexts to different keys for the same consultant', () => {
+    expect(queryKeys.legal.clauses('consultant-1', 'proposal:proposal-1')).not.toEqual(
+      queryKeys.legal.clauses('consultant-1', 'topic:data-residency'),
     )
+  })
 
-    for (const capability of generic) {
-      const namespace = queryKeys[capability]
-      expect(namespace.all).toEqual([capability])
-      expect(namespace.resource('example', 'consultant-1')).toEqual([
-        capability,
-        'example',
-        'consultant-1',
-      ])
-    }
+  it('all is the capability root key', () => {
+    expect(queryKeys.legal.all).toEqual(['legal'])
   })
 })
 

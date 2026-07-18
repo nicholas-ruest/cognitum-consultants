@@ -48,7 +48,7 @@ use uuid::Uuid;
 
 use crate::{
     ActionQueueEntry, ActionQueueEntryError, ActionQueueRepository, ActionState, NotificationItem,
-    NotificationItemError, NotificationRepository, RepoError, SaveOutcome,
+    NotificationItemError, NotificationRepository, RepoError, SaveOutcome, WorkflowSessionRepository,
 };
 
 /// Normalized envelope for any upstream capability event, prior to being
@@ -91,6 +91,25 @@ pub struct CapabilityEventReceived {
     /// field still deserialize.
     #[serde(default)]
     pub related_origin_event_id: Option<String>,
+    /// **PROMPT-41 addition, `LegalClauseUpdated` events only.** The Commit
+    /// `proposal_id` this clause update is tied to, if Nexus's Legal
+    /// envelope names one — the correlation key
+    /// [`legal_clause_updated_is_tied_to_an_in_progress_commit_proposal`]
+    /// uses to implement `anti-corruption-layers.md` §9's own caveat
+    /// conservatively: `LegalClauseUpdated` is "mostly relevant to Commit's
+    /// proposal flow, surfaced here only if a proposal-in-progress
+    /// references a now-stale clause". Neither `../ddd/domain-events.md` §9
+    /// nor the ACL doc's own `LegalClauseUpdated` payload sketch
+    /// (`clause_id, policy_reference`) names a proposal correlation field —
+    /// this is a flagged, provisional addition (same "rough payload, add
+    /// what's structurally required and say so" convention
+    /// [`Self::consultant_id`]'s own doc comment above establishes), pending
+    /// Nexus's actual Legal event contract confirming or correcting it.
+    /// `None`/absent for every event that isn't `LegalClauseUpdated`;
+    /// `#[serde(default)]` so existing payloads that predate this field
+    /// still deserialize.
+    #[serde(default)]
+    pub related_proposal_id: Option<String>,
 }
 
 /// Whether a [`CapabilityEventReceived`] implies a required consultant
@@ -245,6 +264,26 @@ pub enum EventClassification {
 ///   via the existing default — the same "low priority, just refresh/
 ///   notify" reasoning `ProductCatalogUpdated`'s PROMPT-39 doc comment above
 ///   already establishes for Products' own single inbound event.
+/// # PROMPT-41 (Legal ACL) additions: none — plus a conservative pre-filter
+/// Legal's one inbound event (`anti-corruption-layers.md` §9:
+/// `LegalClauseUpdated`) is judged against the same "does this imply the
+/// consultant must now go *do* something, beyond just being told" test the
+/// other capabilities' events were, and classifies as
+/// [`EventClassification::Notification`] via the existing default — a
+/// clause update is informational, not itself a prompt to act. Unlike every
+/// other capability's events, though, the ACL doc's own §9 entry adds a
+/// second, narrower condition before this event should reach a consultant
+/// at all: "rare; mostly relevant to Commit's proposal flow, surfaced here
+/// only if a proposal-in-progress references a now-stale clause". `classify`
+/// itself has no notion of "in progress" (it is a pure
+/// `event_type -> classification` function with no repository access) —
+/// that conservative gate lives one level up, in
+/// [`filter_conservative_legal_events`], which `bff-api`'s polling loop
+/// applies to the raw event batch *before* it ever reaches `classify`/
+/// [`ingest_events`] (see that function's own doc comment for the full
+/// mechanism). A `LegalClauseUpdated` event that survives the filter still
+/// classifies as an ordinary notification here, same as every other
+/// informational event type.
 const ACTION_EVENT_TYPES: &[&str] = &[
     "task_assigned",
     "collaboration_request_acknowledged",
@@ -304,6 +343,85 @@ pub fn classify(event_type: &str) -> EventClassification {
     } else {
         EventClassification::Notification
     }
+}
+
+/// Legal's inbound event name (`anti-corruption-layers.md` §9), matched the
+/// same case/separator-insensitive way as [`ACTION_EVENT_TYPES`]/
+/// [`CONFIRMATION_EVENT_TYPES`] (see [`normalize_event_type`]).
+const LEGAL_CLAUSE_UPDATED_EVENT_TYPE: &str = "legal_clause_updated";
+
+/// True when `event_type` normalizes to [`LEGAL_CLAUSE_UPDATED_EVENT_TYPE`].
+fn is_legal_clause_updated(event_type: &str) -> bool {
+    normalize_event_type(event_type) == normalize_event_type(LEGAL_CLAUSE_UPDATED_EVENT_TYPE)
+}
+
+/// Implements `anti-corruption-layers.md` §9's own caveat on
+/// `LegalClauseUpdated` conservatively: "rare; mostly relevant to Commit's
+/// proposal flow, surfaced here only if a proposal-in-progress references a
+/// now-stale clause". Every event that is *not* a `LegalClauseUpdated` event
+/// passes through unfiltered; a `LegalClauseUpdated` event is kept only when
+/// this repo's own [`crate::CrossCapabilityWorkflowSession`] bookkeeping — the
+/// only cross-capability correlation this repo owns; it stores no copy of
+/// Commit's actual proposal data, per invariant 3 of this repo's own
+/// "Out-of-Scope Reminders" — confirms the referenced proposal is genuinely
+/// in progress:
+/// 1. the event names a [`CapabilityEventReceived::related_proposal_id`],
+///    and
+/// 2. that consultant has an *active* (non-terminal, non-expired)
+///    [`crate::CrossCapabilityWorkflowSession`] whose `target_capability` is
+///    `"commit"` and whose `target_reference` equals that proposal id.
+///
+/// This is a deliberately conservative proxy, not a complete answer: a
+/// proposal created without a `CrossCapabilityWorkflowSession` hand-off
+/// (e.g. `crate::commit`'s own `origin_reference`-only path, in `bff-api`)
+/// is invisible to this check, so its clause updates are never surfaced —
+/// silence, not a false positive, is the safe failure mode the ACL doc's own
+/// caveat calls for. A workflow-session lookup failure is treated the same
+/// conservative way (drop the event) rather than risk surfacing an update
+/// tied to a proposal this repo can no longer confirm is actually in
+/// progress.
+///
+/// Intended call site: `bff-api`'s polling loop, applied to the raw
+/// `Vec<CapabilityEventReceived>` batch *before* it is handed to
+/// [`ingest_events`] — see [`ACTION_EVENT_TYPES`]'s PROMPT-41 doc comment
+/// for why this lives as a separate pre-filter rather than inside `classify`
+/// or `ingest_events` itself (neither has, or should gain, repository
+/// access to a capability this repo has no other reason to look up).
+pub async fn filter_conservative_legal_events(
+    events: Vec<CapabilityEventReceived>,
+    workflow_session_repo: &dyn WorkflowSessionRepository,
+) -> Vec<CapabilityEventReceived> {
+    let mut kept = Vec::with_capacity(events.len());
+    for event in events {
+        if !is_legal_clause_updated(&event.event_type) {
+            kept.push(event);
+            continue;
+        }
+
+        if legal_clause_update_is_tied_to_an_in_progress_commit_proposal(&event, workflow_session_repo)
+            .await
+            .unwrap_or(false)
+        {
+            kept.push(event);
+        }
+        // Dropped: either no related_proposal_id, no matching active
+        // Commit-targeted workflow session, or the repository lookup
+        // itself failed — see the doc comment above for why all three
+        // resolve to the same conservative "don't surface" outcome.
+    }
+    kept
+}
+
+async fn legal_clause_update_is_tied_to_an_in_progress_commit_proposal(
+    event: &CapabilityEventReceived,
+    workflow_session_repo: &dyn WorkflowSessionRepository,
+) -> Result<bool, RepoError> {
+    let Some(proposal_id) = event.related_proposal_id.as_deref() else {
+        return Ok(false);
+    };
+
+    let sessions = workflow_session_repo.find_active_by_consultant_id(&event.consultant_id).await?;
+    Ok(sessions.iter().any(|session| session.target_capability() == "commit" && session.target_reference() == Some(proposal_id)))
 }
 
 /// Default time-to-live applied to an [`ActionQueueEntry`] built from an
@@ -821,6 +939,7 @@ mod tests {
             received_at: t0(),
             consultant_id: "consultant-1".to_string(),
             related_origin_event_id: None,
+            related_proposal_id: None,
         }
     }
 
@@ -1368,6 +1487,153 @@ mod tests {
     fn classify_routes_intelligence_item_published_to_notification() {
         assert_eq!(classify("intelligence_item_published"), EventClassification::Notification);
         assert_eq!(classify("IntelligenceItemPublished"), EventClassification::Notification);
+    }
+
+    #[test]
+    fn classify_routes_legal_clause_updated_to_notification() {
+        // `classify` itself has no notion of "in progress" — the conservative
+        // gate lives in `filter_conservative_legal_events`, applied to the
+        // raw batch before events ever reach `classify`/`ingest_events` (see
+        // that function's doc comment). A `LegalClauseUpdated` event that
+        // survives the filter is still just an ordinary notification here,
+        // same as every other informational event type.
+        assert_eq!(classify("legal_clause_updated"), EventClassification::Notification);
+        assert_eq!(classify("LegalClauseUpdated"), EventClassification::Notification);
+    }
+
+    // --- Legal's conservative pre-filter (PROMPT-41) -----------------------
+
+    #[derive(Default)]
+    struct MockWorkflowSessionRepo {
+        sessions: Mutex<Vec<crate::CrossCapabilityWorkflowSession>>,
+    }
+
+    #[async_trait::async_trait]
+    impl WorkflowSessionRepository for MockWorkflowSessionRepo {
+        async fn find_by_id(&self, session_id: Uuid) -> Result<Option<crate::CrossCapabilityWorkflowSession>, RepoError> {
+            Ok(self.sessions.lock().unwrap().iter().find(|s| s.session_id() == session_id).cloned())
+        }
+
+        async fn find_active_by_consultant_id(
+            &self,
+            consultant_id: &str,
+        ) -> Result<Vec<crate::CrossCapabilityWorkflowSession>, RepoError> {
+            Ok(self
+                .sessions
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|s| s.consultant_id() == consultant_id && !s.status().is_terminal() && !s.is_expired(t0()))
+                .cloned()
+                .collect())
+        }
+
+        async fn save(&self, session: &crate::CrossCapabilityWorkflowSession) -> Result<(), RepoError> {
+            self.sessions.lock().unwrap().push(session.clone());
+            Ok(())
+        }
+
+        async fn expire_older_than(&self, _cutoff: DateTime<Utc>) -> Result<u64, RepoError> {
+            Ok(0)
+        }
+    }
+
+    /// A `CrossCapabilityWorkflowSession` targeting Commit's `proposal_id`,
+    /// still active (`Started`, not expired as of [`t0`]) — the fixture
+    /// `filter_conservative_legal_events` is expected to recognize as "this
+    /// proposal is in progress".
+    fn in_progress_commit_session(consultant_id: &str, proposal_id: &str) -> crate::CrossCapabilityWorkflowSession {
+        let mut session =
+            crate::CrossCapabilityWorkflowSession::start(consultant_id, "sales", "acme-corp", "commit", t0()).unwrap();
+        session.set_target_reference(proposal_id, t0()).unwrap();
+        session
+    }
+
+    /// Same shape as [`event`], for a `LegalClauseUpdated` event carrying
+    /// `related_proposal_id`.
+    fn legal_clause_updated_event(
+        origin_event_id: &str,
+        consultant_id: &str,
+        related_proposal_id: Option<&str>,
+    ) -> CapabilityEventReceived {
+        CapabilityEventReceived {
+            origin_capability: "legal".to_string(),
+            consultant_id: consultant_id.to_string(),
+            related_proposal_id: related_proposal_id.map(str::to_string),
+            ..event(origin_event_id, "legal_clause_updated")
+        }
+    }
+
+    #[tokio::test]
+    async fn filter_conservative_legal_events_keeps_a_clause_update_tied_to_an_in_progress_commit_proposal() {
+        let repo = MockWorkflowSessionRepo::default();
+        repo.save(&in_progress_commit_session("consultant-1", "proposal-1")).await.unwrap();
+
+        let clause_update = legal_clause_updated_event("lcu-1", "consultant-1", Some("proposal-1"));
+        let kept = filter_conservative_legal_events(vec![clause_update.clone()], &repo).await;
+
+        assert_eq!(kept, vec![clause_update]);
+    }
+
+    #[tokio::test]
+    async fn filter_conservative_legal_events_drops_a_clause_update_with_no_related_proposal_id() {
+        let repo = MockWorkflowSessionRepo::default();
+        repo.save(&in_progress_commit_session("consultant-1", "proposal-1")).await.unwrap();
+
+        let clause_update = legal_clause_updated_event("lcu-1", "consultant-1", None);
+        let kept = filter_conservative_legal_events(vec![clause_update], &repo).await;
+
+        assert!(kept.is_empty());
+    }
+
+    #[tokio::test]
+    async fn filter_conservative_legal_events_drops_a_clause_update_with_no_matching_workflow_session() {
+        let repo = MockWorkflowSessionRepo::default();
+        // A session exists, but for a *different* proposal.
+        repo.save(&in_progress_commit_session("consultant-1", "proposal-other")).await.unwrap();
+
+        let clause_update = legal_clause_updated_event("lcu-1", "consultant-1", Some("proposal-1"));
+        let kept = filter_conservative_legal_events(vec![clause_update], &repo).await;
+
+        assert!(kept.is_empty());
+    }
+
+    #[tokio::test]
+    async fn filter_conservative_legal_events_drops_a_clause_update_when_no_session_exists_at_all() {
+        let repo = MockWorkflowSessionRepo::default();
+
+        let clause_update = legal_clause_updated_event("lcu-1", "consultant-1", Some("proposal-1"));
+        let kept = filter_conservative_legal_events(vec![clause_update], &repo).await;
+
+        assert!(kept.is_empty());
+    }
+
+    #[tokio::test]
+    async fn filter_conservative_legal_events_ignores_a_session_belonging_to_a_different_consultant() {
+        let repo = MockWorkflowSessionRepo::default();
+        repo.save(&in_progress_commit_session("someone-else", "proposal-1")).await.unwrap();
+
+        let clause_update = legal_clause_updated_event("lcu-1", "consultant-1", Some("proposal-1"));
+        let kept = filter_conservative_legal_events(vec![clause_update], &repo).await;
+
+        assert!(kept.is_empty());
+    }
+
+    #[tokio::test]
+    async fn filter_conservative_legal_events_passes_through_every_non_legal_clause_updated_event_unfiltered() {
+        let repo = MockWorkflowSessionRepo::default();
+
+        let unrelated = event("evt-1", "task_assigned");
+        let kept = filter_conservative_legal_events(vec![unrelated.clone()], &repo).await;
+
+        assert_eq!(kept, vec![unrelated]);
+    }
+
+    #[test]
+    fn is_legal_clause_updated_matches_regardless_of_casing() {
+        assert!(is_legal_clause_updated("legal_clause_updated"));
+        assert!(is_legal_clause_updated("LegalClauseUpdated"));
+        assert!(!is_legal_clause_updated("intelligence_item_published"));
     }
 
     // --- confirmation events / ingest_confirmation (PROMPT-38) ------------

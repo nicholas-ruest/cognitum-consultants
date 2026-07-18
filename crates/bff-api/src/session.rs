@@ -183,6 +183,17 @@ pub struct AppState {
     /// even though both implement the same [`nexus_client::LandscapeGateway`]
     /// trait — see `crate::landscape` module docs.
     pub landscape_command_gateway: Arc<dyn nexus_client::LandscapeGateway>,
+    /// Legal ACL gateway (ADR-007, PROMPT-41) used for
+    /// `LegalGateway::request_approved_clauses`. Unlike
+    /// [`Self::sales_query_gateway`]/[`Self::commit_query_gateway`]/
+    /// [`Self::landscape_query_gateway`], there is no matching
+    /// `legal_command_gateway` — Legal has no side-effecting outbound
+    /// command (`anti-corruption-layers.md` §9: "pure read-only, conformist
+    /// relationship"), so a single `Arc<dyn ...>` instance, retry-wrapped
+    /// over the ADR-016 read timeout budget, safely serves the whole trait —
+    /// the same shape as [`Self::customer_gateway`]/[`Self::products_gateway`].
+    /// See `crate::legal`/`nexus_client::legal` module docs.
+    pub legal_gateway: Arc<dyn nexus_client::LegalGateway>,
     /// Repository for [`bff_core::CrossCapabilityWorkflowSession`]
     /// (PROMPT-22/34, ADR-010). PROMPT-22 only built the aggregate +
     /// repository; PROMPT-34 is the first real BFF consumer

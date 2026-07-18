@@ -487,6 +487,18 @@ mod tests {
         }
     }
 
+    struct UnusedLegalGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::LegalGateway for UnusedLegalGateway {
+        async fn request_approved_clauses(
+            &self,
+            _context: nexus_client::ClauseContext<'_>,
+        ) -> Result<Vec<nexus_client::ApprovedLegalSnippet>, nexus_client::LegalGatewayError> {
+            unimplemented!("sales tests never call the legal gateway")
+        }
+    }
+
     async fn migrated_pool() -> (persistence::Pool, testcontainers_modules::testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.expect("failed to start postgres container");
         let host = container.get_host().await.expect("failed to resolve container host");
@@ -564,6 +576,7 @@ mod tests {
             products_gateway: Arc::new(UnusedProductsGateway),
             landscape_query_gateway: Arc::new(UnusedLandscapeGateway),
             landscape_command_gateway: Arc::new(UnusedLandscapeGateway),
+            legal_gateway: Arc::new(UnusedLegalGateway),
             workflow_session_repository,
             notification_repository,
             action_queue_repository,

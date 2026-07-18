@@ -48,6 +48,12 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * /landscape/v1/observations` records every request it receives (mirroring
  * `taskCompletionRequests`/`capacityProfileUpdates` above) so a spec can
  * assert the BFF forwarded the expected `submitted_by`/`observation_text`.
+ * Legal's `GET /legal/v1/clauses` (PROMPT-41) always answers with the fixed
+ * `APPROVED_LEGAL_SNIPPET_FIXTURE` below regardless of `proposal_id`/`topic`
+ * (this server has no real clause library to filter against), and records
+ * every request it receives (mirroring `edu-catalog-requests`/
+ * `customer-context-requests` above) so a spec can assert which
+ * `proposal_id`/`topic` query param the BFF actually forwarded.
  *
  * # One exception: the `no_match` fixture, by company name (PROMPT-34)
  * `commit-sales-deeplink.spec.ts` needs a `creation_allowed: true` result to
@@ -326,6 +332,35 @@ const INTELLIGENCE_DIGEST_FIXTURE: IntelligenceDigestItem[] = [
   },
 ]
 
+/** `ApprovedLegalSnippet` shape, mirrored from `crates/nexus-client/src/legal.rs` (PROMPT-41). */
+export interface ApprovedLegalSnippet {
+  clause_id: string
+  title: string
+  approved_text: string
+  policy_reference: string
+}
+
+/**
+ * Fixed `GET /legal/v1/clauses` fixture (PROMPT-41): two approved clauses,
+ * proving the frontend's list rendering — mirroring
+ * `CUSTOMER_CONTEXT_FIXTURE`'s "fixed, not dynamically configurable"
+ * rationale above.
+ */
+const APPROVED_LEGAL_SNIPPET_FIXTURE: ApprovedLegalSnippet[] = [
+  {
+    clause_id: 'clause-1',
+    title: 'Limitation of Liability',
+    approved_text: 'Neither party shall be liable for indirect or consequential damages.',
+    policy_reference: 'policy-2026-01',
+  },
+  {
+    clause_id: 'clause-2',
+    title: 'Confidentiality',
+    approved_text: 'Each party agrees to keep the other party’s confidential information confidential.',
+    policy_reference: 'policy-2025-11',
+  },
+]
+
 export interface CapabilityEventReceived {
   origin_capability: string
   origin_event_id: string
@@ -406,6 +441,9 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
   // spec can confirm the BFF forwarded the expected `submitted_by`/
   // `observation_text`.
   const fieldObservations: RecordedCommand[] = []
+  // PROMPT-41: `GET /legal/v1/clauses` requests, recorded so a spec can
+  // confirm which `proposal_id`/`topic` query param the BFF forwarded.
+  const legalClauseRequests: RecordedCommand[] = []
   // PROMPT-33 e2e: events queued via `POST /_test/enqueue-event` and
   // drained (returned once, then cleared) on the next `GET
   // events/v1/poll` — see `notifications-sse.spec.ts`. Draining, not
@@ -444,6 +482,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
           { consultant_id: consultantId, capability: 'execution', scope: 'default', expires_at: expiresAt },
           { consultant_id: consultantId, capability: 'products', scope: 'default', expires_at: expiresAt },
           { consultant_id: consultantId, capability: 'landscape', scope: 'default', expires_at: expiresAt },
+          { consultant_id: consultantId, capability: 'legal', scope: 'default', expires_at: expiresAt },
         ],
       })
       return
@@ -618,6 +657,21 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    // Legal approved-clauses query (ADR-007, PROMPT-41): always answers with
+    // the fixed `APPROVED_LEGAL_SNIPPET_FIXTURE`, matching
+    // `crates/nexus-client/src/legal.rs`'s `ClausesEnvelope`
+    // (`{"clauses": [...]}`) convention, regardless of which of
+    // `proposal_id`/`topic` was sent.
+    if (method === 'GET' && url.pathname === '/legal/v1/clauses') {
+      legalClauseRequests.push({
+        path: url.pathname,
+        body: { proposal_id: url.searchParams.get('proposal_id'), topic: url.searchParams.get('topic') },
+        receivedAt: new Date().toISOString(),
+      })
+      sendJson(response, 200, { clauses: APPROVED_LEGAL_SNIPPET_FIXTURE })
+      return
+    }
+
     // Events poll (PROMPT-30/PROMPT-33): `bff-api`'s ingestion polling loop
     // (`crates/bff-api/src/event_ingestion.rs`) expects a bare JSON array
     // of `CapabilityEventReceived`. Drains whatever `_test/enqueue-event`
@@ -682,6 +736,11 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    if (method === 'GET' && url.pathname === '/_test/legal-clause-requests') {
+      sendJson(response, 200, legalClauseRequests)
+      return
+    }
+
     // Test-injection route (PROMPT-33): queues one `CapabilityEventReceived`
     // for the *next* `GET events/v1/poll` to pick up — how
     // `notifications-sse.spec.ts` drives a real Nexus->ingestion->NOTIFY/
@@ -706,6 +765,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       taskCompletionRequests.length = 0
       productCatalogRequests.length = 0
       fieldObservations.length = 0
+      legalClauseRequests.length = 0
       sendJson(response, 200, {})
       return
     }

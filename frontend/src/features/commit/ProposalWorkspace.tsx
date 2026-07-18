@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert } from '../../components/Alert'
 import { Button } from '../../components/Button'
 import { TextInput } from '../../components/TextInput'
+import { ApprovedClauses } from '../legal/ApprovedClauses'
 import { queryKeys } from '../../lib/queryKeys'
 import { useSession } from '../../lib/SessionContext'
 
@@ -263,6 +264,13 @@ function ProposalDetail({ proposal, onAction, isActionPending }: ProposalDetailP
             {action.label}
           </Button>
         ))}
+      </div>
+
+      {/* PROMPT-41: approved legal clauses for this proposal, read-only —
+          see `ApprovedClauses.tsx`'s module docs for why this is Legal's
+          primary integration point in this repo. */}
+      <div className="mt-3 border-t border-gray-200 pt-3">
+        <ApprovedClauses context={{ proposalId: proposal.proposal_id }} />
       </div>
     </div>
   )

@@ -400,6 +400,18 @@ mod tests {
         }
     }
 
+    struct UnusedLegalGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::LegalGateway for UnusedLegalGateway {
+        async fn request_approved_clauses(
+            &self,
+            _context: nexus_client::ClauseContext<'_>,
+        ) -> Result<Vec<nexus_client::ApprovedLegalSnippet>, nexus_client::LegalGatewayError> {
+            unimplemented!("notifications tests never call the legal gateway")
+        }
+    }
+
     struct UnusedArmorGateway;
 
     #[async_trait::async_trait]
@@ -470,6 +482,7 @@ mod tests {
             products_gateway: Arc::new(UnusedProductsGateway),
             landscape_query_gateway: Arc::new(UnusedLandscapeGateway),
             landscape_command_gateway: Arc::new(UnusedLandscapeGateway),
+            legal_gateway: Arc::new(UnusedLegalGateway),
             workflow_session_repository: Arc::new(persistence::PgWorkflowSessionRepository::new(unconnected_pool())),
             notification_repository,
             action_queue_repository,
