@@ -3,6 +3,7 @@ mod dashboard;
 mod event_ingestion;
 mod health;
 mod metrics;
+mod notifications_sse;
 mod permissions;
 mod sales;
 mod session;
@@ -170,12 +171,17 @@ async fn main() {
     // `dashboard::dashboard_router` adds the real `GET`/`PUT /api/dashboard`
     // routes (PROMPT-23). `sales::sales_router` adds the real
     // `POST /api/sales/*` routes (PROMPT-25).
+    // `notifications_sse::notifications_router` adds `GET
+    // /api/notifications/stream` (PROMPT-31, ADR-011): the SSE push
+    // endpoint consultants' browsers hold open, subscribed to the same
+    // `event_bus` instance the polling task above publishes into.
     let api_router = Router::new()
         .route("/login/dev", post(session::login_dev))
         .merge(session::protected_router(state.clone()))
         .merge(permissions::diagnostic_router(state.clone()))
         .merge(dashboard::dashboard_router(state.clone()))
-        .merge(sales::sales_router(state.clone()));
+        .merge(sales::sales_router(state.clone()))
+        .merge(notifications_sse::notifications_router(state.clone()));
 
     let mut app = Router::new()
         .route("/healthz", get(health::healthz))

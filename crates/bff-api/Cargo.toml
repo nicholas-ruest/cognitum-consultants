@@ -34,7 +34,10 @@ serde_json = "1.0.150"
 # is set and exists on disk — see `main.rs`.
 tower-http = { version = "0.6", features = ["fs"] }
 tracing.workspace = true
-uuid.workspace = true
+# `serde` feature: `notifications_sse::NotificationStreamEvent` (PROMPT-31)
+# serializes `Uuid` fields (`notification_id`/`entry_id`) directly into the
+# SSE JSON payload.
+uuid = { workspace = true, features = ["serde"] }
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tracing-opentelemetry = "0.33.0"
 opentelemetry_sdk = { version = "0.32.1", features = ["trace"] }
@@ -63,6 +66,11 @@ url = "2.5.8"
 # error type in this repo (`nexus-client`'s `*GatewayError`s, `auth`'s
 # `SessionError`).
 thiserror = "2.0.18"
+# `notifications_sse` (PROMPT-31, ADR-011): wraps the shared
+# `bff_core::EventBus`'s `tokio::sync::broadcast::Receiver` as a `Stream`
+# (`BroadcastStream`) so it can be filtered per-consultant and fed to
+# `axum::response::sse::Sse`. `sync` is the feature gating `wrappers::broadcast`.
+tokio-stream = { version = "0.1.18", features = ["sync"] }
 
 [dev-dependencies]
 # ADR-013 layer 3 / ADR-010: Postgres-backed integration tests via testcontainers.
