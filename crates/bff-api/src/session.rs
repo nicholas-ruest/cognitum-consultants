@@ -67,6 +67,15 @@ pub struct AppState {
     /// `RwLock`-guarded state that must be shared, not duplicated, across
     /// every handler invocation.
     pub permission_cache: Arc<crate::permissions::PermissionCache>,
+    /// Repository for [`bff_core::DashboardConfiguration`] (PROMPT-21/23,
+    /// ADR-010), backing `GET`/`PUT /api/dashboard`
+    /// (`crate::dashboard`). `Arc<dyn ...>`, matching `permission_cache`'s
+    /// convention, so `bff-api` depends only on the `bff_core` trait
+    /// interface (ADR-004) — the concrete Postgres implementation
+    /// (`persistence::PgDashboardConfigurationRepository`) is constructed
+    /// once in `main` and shared read-only across every handler
+    /// invocation.
+    pub dashboard_repository: Arc<dyn bff_core::DashboardConfigurationRepository>,
 }
 
 impl FromRef<AppState> for PrometheusHandle {

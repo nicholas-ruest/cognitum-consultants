@@ -1,4 +1,5 @@
 mod correlation;
+mod dashboard;
 mod metrics;
 mod permissions;
 mod session;
@@ -73,6 +74,12 @@ async fn main() {
     let armor_gateway: Arc<dyn nexus_client::ArmorGateway> = Arc::new(nexus_client::NexusArmorGateway::new(armor_transport));
     let permission_cache = Arc::new(permissions::PermissionCache::new(armor_gateway));
 
+    // PROMPT-21/23, ADR-010: the Postgres-backed `DashboardConfiguration`
+    // repository, constructed alongside the other repositories/gateways
+    // and shared via `AppState` the same way `permission_cache` is.
+    let dashboard_repository: Arc<dyn bff_core::DashboardConfigurationRepository> =
+        Arc::new(persistence::PgDashboardConfigurationRepository::new(db_pool.clone()));
+
     let state = AppState {
         db_pool,
         session_provider,
@@ -84,6 +91,7 @@ async fn main() {
         secure_cookies: !cfg.is_dev(),
         prometheus_handle,
         permission_cache,
+        dashboard_repository,
     };
 
     // `/api/login/dev` is dev-only in practice (see `session` module docs)
@@ -92,10 +100,13 @@ async fn main() {
     // applied `require_session` middleware. `permissions::diagnostic_router`
     // adds one more, temporary, protected route (see its doc comment) that
     // proves the ADR-009 `is_permitted` + `403` short-circuit mechanism.
+    // `dashboard::dashboard_router` adds the real `GET`/`PUT /api/dashboard`
+    // routes (PROMPT-23).
     let api_router = Router::new()
         .route("/login/dev", post(session::login_dev))
         .merge(session::protected_router(state.clone()))
-        .merge(permissions::diagnostic_router(state.clone()));
+        .merge(permissions::diagnostic_router(state.clone()))
+        .merge(dashboard::dashboard_router(state.clone()));
 
     let app = Router::new()
         .route("/healthz", get(healthz))

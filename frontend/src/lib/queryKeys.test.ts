@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CAPABILITIES, capabilityKey, queryKeys } from './queryKeys'
+import { CAPABILITIES, capabilityKey, dashboardQueryKey, queryKeys } from './queryKeys'
 
 // ADR-015 / PROMPT-16: pure tests for the query-key builder convention —
 // no network needed. Assert shapes are correct (capability-namespaced,
@@ -96,5 +96,19 @@ describe('generic capability resource()', () => {
         'consultant-1',
       ])
     }
+  })
+})
+
+describe('dashboardQueryKey', () => {
+  it('builds a [dashboard, consultantId] tuple, not namespaced under any capability', () => {
+    expect(dashboardQueryKey('consultant-1')).toEqual(['dashboard', 'consultant-1'])
+  })
+
+  it('is stable: identical inputs produce deep-equal keys', () => {
+    expect(dashboardQueryKey('consultant-1')).toEqual(dashboardQueryKey('consultant-1'))
+  })
+
+  it('scopes different consultants to different keys', () => {
+    expect(dashboardQueryKey('consultant-1')).not.toEqual(dashboardQueryKey('consultant-2'))
   })
 })

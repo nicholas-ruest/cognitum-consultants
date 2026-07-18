@@ -110,3 +110,26 @@ export const queryKeys = {
     resource: genericResource('legal'),
   },
 } as const
+
+/**
+ * `GET`/`PUT /api/dashboard` (PROMPT-23) query key: `['dashboard', consultantId]`.
+ *
+ * Deliberately **not** routed through `capabilityKey`/the `queryKeys`
+ * capability namespace above. `DashboardConfiguration` is this repo's own
+ * aggregate (`consultant-experience-context.md` §1.2) — it composes
+ * *across* capabilities (a dashboard's cards can reference `sales`,
+ * `commit`, etc. all at once), it isn't itself one capability's data. That
+ * makes it structurally the same case as `useSessionQuery.ts`'s bare
+ * `['session']` key (see that file's comment): a cross-cutting BFF
+ * aggregate, not a `features/<capability>` resource, so forcing it under
+ * one arbitrary capability slot would misrepresent what it is and would
+ * make `queryKeys.sales.all`-style capability-wide invalidation
+ * (incorrectly) sweep up dashboard state too. Unlike `['session']` (which
+ * has no per-consultant variants to distinguish — there is only ever "the
+ * current session"), the dashboard cache is still explicitly scoped by
+ * `consultantId`, since a consultant's dashboard is meaningfully
+ * per-consultant data.
+ */
+export function dashboardQueryKey(consultantId: string) {
+  return ['dashboard', consultantId] as const
+}

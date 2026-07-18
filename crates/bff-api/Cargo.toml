@@ -48,3 +48,12 @@ testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
 # `permissions` unit tests (PROMPT-15) implement a mock `ArmorGateway` test
 # double, which — like `nexus-client`'s own trait — is `#[async_trait]`.
 async-trait = "0.1"
+# `dashboard` router-level tests (PROMPT-23) drive the real Axum `Router`
+# end-to-end (including the `require_session` 401 gate) via `oneshot`,
+# rather than calling handler functions directly.
+tower = { version = "0.5", features = ["util"] }
+# Same tests run migrations against a real, ephemeral Postgres
+# (testcontainers) so `PgDashboardConfigurationRepository` round-trips are
+# exercised for real; version/features match `persistence`'s own choice so
+# `sqlx::migrate!("../persistence/migrations")` resolves identically.
+sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "macros", "migrate"] }
