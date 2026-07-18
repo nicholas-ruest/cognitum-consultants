@@ -12,6 +12,19 @@ are stored as a single JSONB object per consultant, keyed by
 per-preference-row table — see the migration's own comments for why that's
 the pragmatic choice for a three-key allow-list.
 
+`20260718003944_dashboard_configuration.{up,down}.sql` (U21/PROMPT-21)
+creates `dashboard_configurations` + `card_placements` for
+`bff_core::DashboardConfiguration`.
+
+`20260718004942_cross_capability_workflow_sessions.{up,down}.sql`
+(U22/PROMPT-22) creates `cross_capability_workflow_sessions` for
+`bff_core::CrossCapabilityWorkflowSession`. Unlike the two aggregates
+above, this is not one row per consultant — `session_id` is the primary
+key, and `(consultant_id, status)` is indexed to support
+`WorkflowSessionRepository::find_active_by_consultant_id` and the
+`expire_older_than` housekeeping sweep. See the migration's own comments
+for the full rationale.
+
 This README file also exists so git tracks this directory even when a
 migration set is otherwise removed; it is not itself a migration and `sqlx
 migrate run` ignores it (only `*.sql` files matter to the migrator).

@@ -19,6 +19,15 @@ thiserror = "2.0.18"
 # the other way around, so the earlier stub dependency on `persistence` here
 # has been removed to avoid a crate dependency cycle.
 serde = { version = "1.0", features = ["derive"] }
+# `CrossCapabilityWorkflowSession` (PROMPT-22) needs `session_id: Uuid` and
+# `expires_at: DateTime<Utc>` for its TTL invariant. `uuid` is a workspace
+# dependency (already pulled in with the `v4` feature by `auth`'s `Session`);
+# `chrono`'s version/feature set matches `auth`'s choice (PROMPT-10) so
+# timestamps round-trip identically across crates without a `serde` feature
+# this crate doesn't need (persistence converts at its own boundary, per
+# ADR-004).
+uuid = { workspace = true }
+chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

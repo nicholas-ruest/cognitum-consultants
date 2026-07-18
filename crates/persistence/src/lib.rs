@@ -9,9 +9,11 @@
 
 mod consultant_preferences_repository;
 mod dashboard_configuration_repository;
+mod workflow_session_repository;
 
 pub use consultant_preferences_repository::PgConsultantPreferencesRepository;
 pub use dashboard_configuration_repository::PgDashboardConfigurationRepository;
+pub use workflow_session_repository::PgWorkflowSessionRepository;
 
 use std::time::Duration;
 

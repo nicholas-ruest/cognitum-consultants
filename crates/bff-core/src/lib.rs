@@ -8,6 +8,7 @@
 mod consultant_preferences;
 mod dashboard_configuration;
 mod preference_key;
+mod workflow_session;
 
 pub use consultant_preferences::{
     ConsultantPreferences, ConsultantPreferencesError, ConsultantPreferencesRepository, RepoError,
@@ -17,3 +18,7 @@ pub use dashboard_configuration::{
     DashboardConfigurationRepository, DEFAULT_CARD_MODULE_IDS,
 };
 pub use preference_key::{ParsePreferenceKeyError, PreferenceKey};
+pub use workflow_session::{
+    CrossCapabilityWorkflowSession, ParseWorkflowSessionStatusError, WorkflowSessionError,
+    WorkflowSessionRepository, WorkflowSessionStatus, DEFAULT_WORKFLOW_SESSION_TTL_MINUTES,
+};

@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO cross_capability_workflow_sessions\n                (session_id, consultant_id, origin_capability, origin_reference,\n                 target_capability, target_reference, status, expires_at, updated_at)\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())\n            ON CONFLICT (session_id)\n            DO UPDATE SET\n                target_reference = EXCLUDED.target_reference,\n                status = EXCLUDED.status,\n                expires_at = EXCLUDED.expires_at,\n                updated_at = now()\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4a2aaa8a005c40ebcfadd7c58131f970ae7041ee2fafe337f9d67c0d527c6bc7"
+}

@@ -1,0 +1,112 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT session_id, consultant_id, origin_capability, origin_reference,\n                   target_capability, target_reference, status, expires_at\n            FROM cross_capability_workflow_sessions\n            WHERE consultant_id = $1\n              AND status NOT IN ('completed', 'abandoned', 'expired')\n              AND expires_at > now()\n            ORDER BY expires_at\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "session_id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "cross_capability_workflow_sessions",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "consultant_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cross_capability_workflow_sessions",
+            "name": "consultant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "origin_capability",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cross_capability_workflow_sessions",
+            "name": "origin_capability"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "origin_reference",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cross_capability_workflow_sessions",
+            "name": "origin_reference"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "target_capability",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cross_capability_workflow_sessions",
+            "name": "target_capability"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "target_reference",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cross_capability_workflow_sessions",
+            "name": "target_reference"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "cross_capability_workflow_sessions",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "cross_capability_workflow_sessions",
+            "name": "expires_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "58e5891983a8c93fbde7579f2a1d1996b4d1facfbc09e5d7276e7af6cf6a6abc"
+}

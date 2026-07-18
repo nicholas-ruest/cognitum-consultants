@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE cross_capability_workflow_sessions\n            SET status = 'expired', updated_at = now()\n            WHERE status NOT IN ('completed', 'abandoned', 'expired')\n              AND expires_at < $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5a51c2182d353ee6b91094286634ccedb0b37b80eac36ecaa368070c6e16f9de"
+}

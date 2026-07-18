@@ -1,0 +1,1 @@
+DROP TABLE cross_capability_workflow_sessions;
