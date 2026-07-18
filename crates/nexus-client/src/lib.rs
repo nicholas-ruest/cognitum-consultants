@@ -18,6 +18,7 @@ pub mod armor;
 pub mod circuit_breaker;
 pub mod reqwest_transport;
 pub mod retry;
+pub mod sales;
 pub mod timeout;
 pub mod transport;
 
@@ -25,5 +26,6 @@ pub use armor::{ArmorGateway, ArmorGatewayError, NexusArmorGateway, PermissionAs
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakingTransport, CircuitState, SlidingWindowCircuitBreaker};
 pub use reqwest_transport::ReqwestNexusTransport;
 pub use retry::{DEFAULT_MAX_RETRIES, RetryingTransport};
+pub use sales::{AccountClaimResult, NexusSalesGateway, SalesGateway, SalesGatewayError};
 pub use timeout::{DEFAULT_READ_TIMEOUT, DEFAULT_WRITE_TIMEOUT, TimeoutTransport};
 pub use transport::{NexusRequest, NexusResponse, NexusTransport, NexusTransportError};
