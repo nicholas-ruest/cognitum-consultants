@@ -77,7 +77,11 @@ describe('DashboardPage', () => {
       expect(screen.getByRole('heading', { name: 'Commit' })).toBeInTheDocument()
     })
 
-    expect(screen.getAllByText('no live data yet')).toHaveLength(2)
+    // PROMPT-26: the "sales" card now hosts the real `LeadConflictCheck`
+    // feature module, not the placeholder — only the remaining
+    // (non-sales) card still renders it.
+    expect(screen.getAllByText('no live data yet')).toHaveLength(1)
+    expect(screen.getByLabelText('Company Name')).toBeInTheDocument()
   })
 
   it('renders zero cards when the dashboard has none', async () => {
