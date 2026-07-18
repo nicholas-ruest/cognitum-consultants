@@ -130,6 +130,17 @@ pub struct AppState {
     /// even though both implement the same [`nexus_client::CapacityGateway`]
     /// trait — see `crate::capacity` module docs.
     pub capacity_command_gateway: Arc<dyn nexus_client::CapacityGateway>,
+    /// Customer ACL gateway (ADR-016, PROMPT-37) used for
+    /// `CustomerGateway::request_assigned_customer_context`. Unlike
+    /// [`Self::sales_query_gateway`]/[`Self::commit_query_gateway`]/
+    /// [`Self::capacity_query_gateway`], there is no matching
+    /// `customer_command_gateway` — Customer has no side-effecting outbound
+    /// command (`anti-corruption-layers.md` §5), so a single `Arc<dyn ...>`
+    /// instance, retry-wrapped over the ADR-016 read timeout budget, safely
+    /// serves the whole trait — the same shape as
+    /// [`Self::edu_gateway`]. See `crate::customer`/`nexus_client::customer`
+    /// module docs.
+    pub customer_gateway: Arc<dyn nexus_client::CustomerGateway>,
     /// Repository for [`bff_core::CrossCapabilityWorkflowSession`]
     /// (PROMPT-22/34, ADR-010). PROMPT-22 only built the aggregate +
     /// repository; PROMPT-34 is the first real BFF consumer

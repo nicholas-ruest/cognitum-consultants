@@ -18,10 +18,10 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * `http.createServer` covers with zero added dependencies.
  *
  * # Fixtures are fixed, not dynamically configurable
- * This server always grants the `"sales"`, `"commit"`, `"edu"`, and
- * `"capacity"` capabilities (for whichever `consultant_id` is asked about)
- * and always answers a company-claim check for most company names with the
- * `active_owned_account` fixture — `.plans/ddd/anti-corruption-layers.md`
+ * This server always grants the `"sales"`, `"commit"`, `"edu"`, `"capacity"`,
+ * and `"customer"` capabilities (for whichever `consultant_id` is asked
+ * about) and always answers a company-claim check for most company names
+ * with the `active_owned_account` fixture — `.plans/ddd/anti-corruption-layers.md`
  * §1's worked example, and the same fixture `crates/bff-api/src/sales.rs`'s
  * own integration tests use (`active_owned_account_fixture()`). Edu's
  * `GET /edu/v1/catalog` (PROMPT-35) always answers with the fixed
@@ -31,7 +31,10 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * whatever is currently stored (seeded from `PROFILE_FIXTURE`), and `POST`
  * always accepts the update and overwrites the stored profile with it — see
  * the module docs for why a stateful round-trip was chosen over a fixed
- * always-the-same-response fixture for this one capability.
+ * always-the-same-response fixture for this one capability. Customer's
+ * `GET /customer/v1/context` (PROMPT-37) always answers with the fixed
+ * `CUSTOMER_CONTEXT_FIXTURE` below, matching Edu's "fixed, not dynamically
+ * configurable" pattern.
  *
  * # One exception: the `no_match` fixture, by company name (PROMPT-34)
  * `commit-sales-deeplink.spec.ts` needs a `creation_allowed: true` result to
@@ -178,6 +181,39 @@ const PROFILE_FIXTURE: ConsultantProfileIntake = {
   geographic_coverage: ['EMEA'],
 }
 
+/** `CustomerContextCard` shape, mirrored from `crates/nexus-client/src/customer.rs` (PROMPT-37). */
+export interface CustomerContextCard {
+  customer_id: string
+  name: string
+  health_status: string
+  relationship_summary: string
+  deep_link: string | null
+}
+
+/**
+ * Fixed `GET /customer/v1/context` fixture (PROMPT-37): one healthy customer
+ * and one at-risk customer, proving the frontend's list-plus-detail
+ * rendering against more than one `health_status` value — mirroring
+ * `LEARNING_CATALOG_FIXTURE`'s "fixed, not dynamically configurable"
+ * rationale above.
+ */
+const CUSTOMER_CONTEXT_FIXTURE: CustomerContextCard[] = [
+  {
+    customer_id: 'customer-1',
+    name: 'Acme Corp',
+    health_status: 'green',
+    relationship_summary: 'Healthy, quarterly business review scheduled.',
+    deep_link: 'https://customer.cognitum.one/customers/customer-1',
+  },
+  {
+    customer_id: 'customer-2',
+    name: 'Beta LLC',
+    health_status: 'red',
+    relationship_summary: 'At risk — escalation in progress.',
+    deep_link: null,
+  },
+]
+
 export interface CapabilityEventReceived {
   origin_capability: string
   origin_event_id: string
@@ -236,6 +272,9 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
   // `POST /capacity/v1/profile` this server received.
   const capacityProfiles = new Map<string, ConsultantProfileIntake>()
   const capacityProfileUpdates: RecordedCommand[] = []
+  // PROMPT-37: `GET /customer/v1/context` requests, recorded so a spec can
+  // confirm which `consultant_id` the BFF forwarded.
+  const customerContextRequests: RecordedCommand[] = []
   // PROMPT-33 e2e: events queued via `POST /_test/enqueue-event` and
   // drained (returned once, then cleared) on the next `GET
   // events/v1/poll` — see `notifications-sse.spec.ts`. Draining, not
@@ -270,6 +309,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
           { consultant_id: consultantId, capability: 'commit', scope: 'default', expires_at: expiresAt },
           { consultant_id: consultantId, capability: 'edu', scope: 'default', expires_at: expiresAt },
           { consultant_id: consultantId, capability: 'capacity', scope: 'default', expires_at: expiresAt },
+          { consultant_id: consultantId, capability: 'customer', scope: 'default', expires_at: expiresAt },
         ],
       })
       return
@@ -376,6 +416,22 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    // Customer assigned-context query (ADR-016, PROMPT-37): always answers
+    // with the fixed `CUSTOMER_CONTEXT_FIXTURE`, matching
+    // `crates/nexus-client/src/customer.rs`'s `CustomerContextEnvelope`
+    // (`{"contexts": [...]}`) convention. `consultant_id` is recorded so a
+    // spec can assert the BFF forwarded the authenticated consultant, the
+    // same shape `_test/edu-catalog-requests` proves for Edu.
+    if (method === 'GET' && url.pathname === '/customer/v1/context') {
+      customerContextRequests.push({
+        path: url.pathname,
+        body: { consultant_id: url.searchParams.get('consultant_id') },
+        receivedAt: new Date().toISOString(),
+      })
+      sendJson(response, 200, { contexts: CUSTOMER_CONTEXT_FIXTURE })
+      return
+    }
+
     // Events poll (PROMPT-30/PROMPT-33): `bff-api`'s ingestion polling loop
     // (`crates/bff-api/src/event_ingestion.rs`) expects a bare JSON array
     // of `CapabilityEventReceived`. Drains whatever `_test/enqueue-event`
@@ -420,6 +476,11 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    if (method === 'GET' && url.pathname === '/_test/customer-context-requests') {
+      sendJson(response, 200, customerContextRequests)
+      return
+    }
+
     // Test-injection route (PROMPT-33): queues one `CapabilityEventReceived`
     // for the *next* `GET events/v1/poll` to pick up — how
     // `notifications-sse.spec.ts` drives a real Nexus->ingestion->NOTIFY/
@@ -440,6 +501,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       catalogRequests.length = 0
       capacityProfiles.clear()
       capacityProfileUpdates.length = 0
+      customerContextRequests.length = 0
       sendJson(response, 200, {})
       return
     }

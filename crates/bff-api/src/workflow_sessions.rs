@@ -253,6 +253,19 @@ mod tests {
         }
     }
 
+    struct UnusedCustomerGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::CustomerGateway for UnusedCustomerGateway {
+        async fn request_assigned_customer_context(
+            &self,
+            _consultant_id: &str,
+            _customer_id: Option<&str>,
+        ) -> Result<Vec<nexus_client::CustomerContextCard>, nexus_client::CustomerGatewayError> {
+            unimplemented!("workflow_sessions tests never call the customer gateway")
+        }
+    }
+
     async fn migrated_pool() -> (persistence::Pool, testcontainers_modules::testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.expect("failed to start postgres container");
         let host = container.get_host().await.expect("failed to resolve container host");
@@ -307,6 +320,7 @@ mod tests {
             edu_gateway: Arc::new(UnusedEduGateway),
             capacity_query_gateway: Arc::new(UnusedCapacityGateway),
             capacity_command_gateway: Arc::new(UnusedCapacityGateway),
+            customer_gateway: Arc::new(UnusedCustomerGateway),
             workflow_session_repository,
             notification_repository: Arc::new(persistence::PgNotificationRepository::new(pool.clone())),
             action_queue_repository: Arc::new(persistence::PgActionQueueRepository::new(pool.clone())),

@@ -89,11 +89,17 @@ describe('queryKeys.capacity', () => {
   })
 })
 
+describe('queryKeys.customer', () => {
+  it('assigned() matches PROMPT-37 GET /api/customer/assigned shape', () => {
+    expect(queryKeys.customer.assigned('consultant-1')).toEqual(['customer', 'assigned', 'consultant-1'])
+  })
+})
+
 describe('generic capability resource()', () => {
   it('builds capability-namespaced keys for capabilities with no real routes yet', () => {
-    expect(queryKeys.customer.resource('skills', 'consultant-1')).toEqual([
-      'customer',
-      'skills',
+    expect(queryKeys.execution.resource('milestones', 'consultant-1')).toEqual([
+      'execution',
+      'milestones',
       'consultant-1',
     ])
     expect(queryKeys.legal.resource('contracts', 'consultant-1')).toEqual([
@@ -103,8 +109,10 @@ describe('generic capability resource()', () => {
     ])
   })
 
-  it('every non-sales/commit/edu/capacity capability exposes all + resource', () => {
-    const generic = CAPABILITIES.filter((c) => c !== 'sales' && c !== 'commit' && c !== 'edu' && c !== 'capacity')
+  it('every non-sales/commit/edu/capacity/customer capability exposes all + resource', () => {
+    const generic = CAPABILITIES.filter(
+      (c) => c !== 'sales' && c !== 'commit' && c !== 'edu' && c !== 'capacity' && c !== 'customer',
+    )
 
     for (const capability of generic) {
       const namespace = queryKeys[capability]

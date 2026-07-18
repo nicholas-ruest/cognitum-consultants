@@ -150,6 +150,24 @@ pub enum EventClassification {
 ///   — the same "names one concrete action" reasoning `task_assigned`'s
 ///   own doc comment above already establishes, not a generic status
 ///   update.
+/// # PROMPT-37 (Customer ACL) additions: none
+/// Customer's two inbound events (`anti-corruption-layers.md` §5:
+/// `CustomerHealthChanged`, `CustomerInteractionLogged`) were each judged
+/// against the same "does this imply the consultant must now go *do*
+/// something, beyond just being told" test the other capabilities' events
+/// were:
+/// - `CustomerHealthChanged` -> **notification**. A health-status change is
+///   informational — `anti-corruption-layers.md` §5 itself describes both
+///   inbound events as feeding "dashboard cards / notifications", not an
+///   action queue. There is no single concrete action this repo could name
+///   for "a customer's health changed" the way `task_assigned` names one.
+/// - `CustomerInteractionLogged` -> **notification**. A logged interaction
+///   is a receipt of something that already happened, not a prompt to act —
+///   same reasoning `ProposalCreated`/`CourseCompleted` were classified
+///   under.
+///
+/// Neither is added to [`ACTION_EVENT_TYPES`]; both classify as
+/// [`EventClassification::Notification`] via the existing default.
 const ACTION_EVENT_TYPES: &[&str] = &[
     "task_assigned",
     "collaboration_request_acknowledged",
@@ -930,6 +948,55 @@ mod tests {
         assert_eq!(classify("CourseCompleted"), EventClassification::Notification);
         assert_eq!(classify("certification_issued"), EventClassification::Notification);
         assert_eq!(classify("CertificationIssued"), EventClassification::Notification);
+    }
+
+    // --- Customer events as real concrete test cases (PROMPT-37) ---------
+
+    /// `CustomerHealthChanged`/`CustomerInteractionLogged` — both
+    /// informational per `ACTION_EVENT_TYPES`'s PROMPT-37 doc comment —
+    /// used as the real Customer events PROMPT-37 asks to be classified
+    /// against, matching `edu_events_are_classified_and_ingested_as_documented`'s
+    /// shape above.
+    #[tokio::test]
+    async fn customer_events_are_classified_and_ingested_as_documented() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+        let bus = EventBus::new(16);
+
+        let mut customer_health_changed = event("chc-1", "customer_health_changed");
+        customer_health_changed.origin_capability = "customer".to_string();
+        let mut customer_interaction_logged = event("cil-1", "customer_interaction_logged");
+        customer_interaction_logged.origin_capability = "customer".to_string();
+
+        let result = ingest_events(
+            vec![customer_health_changed.clone(), customer_interaction_logged.clone()],
+            &notification_repo,
+            &action_repo,
+            &bus,
+        )
+        .await;
+
+        assert_eq!(result.inserted(), 2);
+        assert_eq!(result.rejected(), 0);
+
+        let notifications = notification_repo.rows.lock().unwrap();
+        assert_eq!(
+            notifications.len(),
+            2,
+            "CustomerHealthChanged and CustomerInteractionLogged are both informational"
+        );
+        assert!(notifications.contains_key(&("customer".to_string(), "chc-1".to_string())));
+        assert!(notifications.contains_key(&("customer".to_string(), "cil-1".to_string())));
+
+        assert_eq!(action_repo.rows.lock().unwrap().len(), 0, "neither Customer event implies a required action");
+    }
+
+    #[test]
+    fn classify_routes_customer_events_to_notification() {
+        assert_eq!(classify("customer_health_changed"), EventClassification::Notification);
+        assert_eq!(classify("CustomerHealthChanged"), EventClassification::Notification);
+        assert_eq!(classify("customer_interaction_logged"), EventClassification::Notification);
+        assert_eq!(classify("CustomerInteractionLogged"), EventClassification::Notification);
     }
 
     // --- construction -----------------------------------------------------

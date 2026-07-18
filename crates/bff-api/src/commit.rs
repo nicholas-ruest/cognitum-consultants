@@ -361,6 +361,19 @@ mod tests {
         }
     }
 
+    struct UnusedCustomerGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::CustomerGateway for UnusedCustomerGateway {
+        async fn request_assigned_customer_context(
+            &self,
+            _consultant_id: &str,
+            _customer_id: Option<&str>,
+        ) -> Result<Vec<nexus_client::CustomerContextCard>, nexus_client::CustomerGatewayError> {
+            unimplemented!("commit tests never call the customer gateway")
+        }
+    }
+
     enum Outcome<T> {
         Ok(T),
         Err,
@@ -501,6 +514,7 @@ mod tests {
             edu_gateway: Arc::new(UnusedEduGateway),
             capacity_query_gateway: Arc::new(UnusedCapacityGateway),
             capacity_command_gateway: Arc::new(UnusedCapacityGateway),
+            customer_gateway: Arc::new(UnusedCustomerGateway),
             workflow_session_repository,
             notification_repository,
             action_queue_repository,

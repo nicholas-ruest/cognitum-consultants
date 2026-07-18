@@ -1,6 +1,7 @@
 mod capacity;
 mod commit;
 mod correlation;
+mod customer;
 mod dashboard;
 mod edu;
 mod event_ingestion;
@@ -174,6 +175,22 @@ async fn main() {
     let capacity_command_gateway: Arc<dyn nexus_client::CapacityGateway> =
         Arc::new(nexus_client::NexusCapacityGateway::new(capacity_command_transport));
 
+    // Customer ACL gateway (ADR-016, PROMPT-37): a single instance, unlike
+    // Sales/Commit/Capacity's two-instance split — Customer has no
+    // side-effecting outbound command to isolate a retry-safe read from
+    // (see `customer`/`nexus_client::customer` module docs), the same shape
+    // as Edu above. `request_assigned_customer_context` gets the read
+    // timeout wrapped in `RetryingTransport`, since it is an idempotent
+    // query with no synchronous UI-blocking call sharing this gateway.
+    let customer_base_transport = nexus_client::ReqwestNexusTransport::new(&cfg.nexus_endpoint_url)
+        .unwrap_or_else(|err| panic!("invalid nexus_endpoint_url {:?}: {err}", cfg.nexus_endpoint_url));
+    let customer_timeout_transport =
+        nexus_client::TimeoutTransport::new(Arc::new(customer_base_transport), nexus_client::DEFAULT_READ_TIMEOUT);
+    let customer_transport: Arc<dyn nexus_client::NexusTransport> =
+        Arc::new(nexus_client::RetryingTransport::with_default_retries(Arc::new(customer_timeout_transport)));
+    let customer_gateway: Arc<dyn nexus_client::CustomerGateway> =
+        Arc::new(nexus_client::NexusCustomerGateway::new(customer_transport));
+
     // PROMPT-22/34, ADR-010: the Postgres-backed `CrossCapabilityWorkflowSession`
     // repository — PROMPT-22 built this, but no BFF route consumed it until
     // this unit (`workflow_sessions::workflow_sessions_router`,
@@ -267,6 +284,7 @@ async fn main() {
         edu_gateway,
         capacity_query_gateway,
         capacity_command_gateway,
+        customer_gateway,
         workflow_session_repository,
         notification_repository,
         action_queue_repository,
@@ -296,7 +314,8 @@ async fn main() {
     // deliberately no `.../complete` route.
     // `edu::edu_router` adds `GET /api/edu/catalog` (PROMPT-35).
     // `capacity::capacity_router` adds `GET`/`PATCH /api/capacity/profile`
-    // (PROMPT-36).
+    // (PROMPT-36). `customer::customer_router` adds
+    // `GET /api/customer/assigned` (PROMPT-37).
     let api_router = Router::new()
         .route("/login/dev", post(session::login_dev))
         .merge(session::protected_router(state.clone()))
@@ -306,6 +325,7 @@ async fn main() {
         .merge(commit::commit_router(state.clone()))
         .merge(edu::edu_router(state.clone()))
         .merge(capacity::capacity_router(state.clone()))
+        .merge(customer::customer_router(state.clone()))
         .merge(workflow_sessions::workflow_sessions_router(state.clone()))
         .merge(notifications_sse::notifications_router(state.clone()))
         .merge(notifications::notifications_write_router(state.clone()));
