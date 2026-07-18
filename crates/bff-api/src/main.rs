@@ -1,3 +1,4 @@
+mod capacity;
 mod commit;
 mod correlation;
 mod dashboard;
@@ -148,6 +149,31 @@ async fn main() {
         Arc::new(nexus_client::RetryingTransport::with_default_retries(Arc::new(edu_timeout_transport)));
     let edu_gateway: Arc<dyn nexus_client::EduGateway> = Arc::new(nexus_client::NexusEduGateway::new(edu_transport));
 
+    // Capacity ACL gateway (ADR-016, PROMPT-36): same shared-base-transport,
+    // two-instances split as Sales/Commit above — see
+    // `capacity`/`nexus_client::capacity` module docs for the full decision
+    // writeup. `get_own_profile` gets the read timeout + retry (idempotent,
+    // page-load-ish); `update_own_profile` gets the write timeout, no retry
+    // (a non-idempotent command).
+    let capacity_base_transport = nexus_client::ReqwestNexusTransport::new(&cfg.nexus_endpoint_url)
+        .unwrap_or_else(|err| panic!("invalid nexus_endpoint_url {:?}: {err}", cfg.nexus_endpoint_url));
+    let capacity_base_transport: Arc<dyn nexus_client::NexusTransport> = Arc::new(capacity_base_transport);
+
+    let capacity_query_timeout_transport = Arc::new(nexus_client::TimeoutTransport::new(
+        capacity_base_transport.clone(),
+        nexus_client::DEFAULT_READ_TIMEOUT,
+    ));
+    let capacity_query_transport: Arc<dyn nexus_client::NexusTransport> =
+        Arc::new(nexus_client::RetryingTransport::with_default_retries(capacity_query_timeout_transport));
+    let capacity_query_gateway: Arc<dyn nexus_client::CapacityGateway> =
+        Arc::new(nexus_client::NexusCapacityGateway::new(capacity_query_transport));
+
+    let capacity_command_transport: Arc<dyn nexus_client::NexusTransport> = Arc::new(
+        nexus_client::TimeoutTransport::new(capacity_base_transport, nexus_client::DEFAULT_WRITE_TIMEOUT),
+    );
+    let capacity_command_gateway: Arc<dyn nexus_client::CapacityGateway> =
+        Arc::new(nexus_client::NexusCapacityGateway::new(capacity_command_transport));
+
     // PROMPT-22/34, ADR-010: the Postgres-backed `CrossCapabilityWorkflowSession`
     // repository — PROMPT-22 built this, but no BFF route consumed it until
     // this unit (`workflow_sessions::workflow_sessions_router`,
@@ -239,6 +265,8 @@ async fn main() {
         commit_query_gateway,
         commit_command_gateway,
         edu_gateway,
+        capacity_query_gateway,
+        capacity_command_gateway,
         workflow_session_repository,
         notification_repository,
         action_queue_repository,
@@ -267,6 +295,8 @@ async fn main() {
     // /api/action-queue/:id/start` — see that module's docs for why there is
     // deliberately no `.../complete` route.
     // `edu::edu_router` adds `GET /api/edu/catalog` (PROMPT-35).
+    // `capacity::capacity_router` adds `GET`/`PATCH /api/capacity/profile`
+    // (PROMPT-36).
     let api_router = Router::new()
         .route("/login/dev", post(session::login_dev))
         .merge(session::protected_router(state.clone()))
@@ -275,6 +305,7 @@ async fn main() {
         .merge(sales::sales_router(state.clone()))
         .merge(commit::commit_router(state.clone()))
         .merge(edu::edu_router(state.clone()))
+        .merge(capacity::capacity_router(state.clone()))
         .merge(workflow_sessions::workflow_sessions_router(state.clone()))
         .merge(notifications_sse::notifications_router(state.clone()))
         .merge(notifications::notifications_write_router(state.clone()));

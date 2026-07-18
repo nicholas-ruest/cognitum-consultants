@@ -18,15 +18,20 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * `http.createServer` covers with zero added dependencies.
  *
  * # Fixtures are fixed, not dynamically configurable
- * This server always grants the `"sales"`, `"commit"`, and `"edu"`
- * capabilities (for whichever `consultant_id` is asked about) and always
- * answers a company-claim check for most company names with the
+ * This server always grants the `"sales"`, `"commit"`, `"edu"`, and
+ * `"capacity"` capabilities (for whichever `consultant_id` is asked about)
+ * and always answers a company-claim check for most company names with the
  * `active_owned_account` fixture — `.plans/ddd/anti-corruption-layers.md`
  * §1's worked example, and the same fixture `crates/bff-api/src/sales.rs`'s
  * own integration tests use (`active_owned_account_fixture()`). Edu's
  * `GET /edu/v1/catalog` (PROMPT-35) always answers with the fixed
  * `LEARNING_CATALOG_FIXTURE` below, matching that module's own inline doc
- * comment.
+ * comment. Capacity's `GET`/`POST /capacity/v1/profile` (PROMPT-36) serve a
+ * single, stateful `PROFILE_FIXTURE` per `consultant_id`: `GET` returns
+ * whatever is currently stored (seeded from `PROFILE_FIXTURE`), and `POST`
+ * always accepts the update and overwrites the stored profile with it — see
+ * the module docs for why a stateful round-trip was chosen over a fixed
+ * always-the-same-response fixture for this one capability.
  *
  * # One exception: the `no_match` fixture, by company name (PROMPT-34)
  * `commit-sales-deeplink.spec.ts` needs a `creation_allowed: true` result to
@@ -151,6 +156,28 @@ const LEARNING_CATALOG_FIXTURE: LearningSnapshot[] = [
  * `GET events/v1/poll` contract `bff-api`'s ingestion polling loop
  * (PROMPT-30) expects a bare JSON array of.
  */
+/** `ConsultantProfileIntake` shape, mirrored from `crates/nexus-client/src/capacity.rs`. */
+export interface ConsultantProfileIntake {
+  skills: string[]
+  certifications: string[]
+  languages: string[]
+  availability_window: string
+  geographic_coverage: string[]
+}
+
+/**
+ * Fixed initial `GET /capacity/v1/profile` fixture (PROMPT-36) — seeds the
+ * per-`consultant_id` stateful store on first read/write. See the module
+ * docs for why this one capability's fixture is stateful rather than fixed.
+ */
+const PROFILE_FIXTURE: ConsultantProfileIntake = {
+  skills: ['Rust', 'Cloud Architecture'],
+  certifications: ['AWS Solutions Architect'],
+  languages: ['English', 'French'],
+  availability_window: '2026-08-01/2026-12-31',
+  geographic_coverage: ['EMEA'],
+}
+
 export interface CapabilityEventReceived {
   origin_capability: string
   origin_event_id: string
@@ -204,6 +231,11 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
   // PROMPT-35: `GET /edu/v1/catalog` requests, recorded so a spec can
   // confirm which `consultant_id` the BFF forwarded.
   const catalogRequests: RecordedCommand[] = []
+  // PROMPT-36: per-`consultant_id` Capacity profile store, seeded lazily
+  // from `PROFILE_FIXTURE` on first `GET`/`POST`, plus a record of every
+  // `POST /capacity/v1/profile` this server received.
+  const capacityProfiles = new Map<string, ConsultantProfileIntake>()
+  const capacityProfileUpdates: RecordedCommand[] = []
   // PROMPT-33 e2e: events queued via `POST /_test/enqueue-event` and
   // drained (returned once, then cleared) on the next `GET
   // events/v1/poll` — see `notifications-sse.spec.ts`. Draining, not
@@ -237,6 +269,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
           { consultant_id: consultantId, capability: 'sales', scope: 'default', expires_at: expiresAt },
           { consultant_id: consultantId, capability: 'commit', scope: 'default', expires_at: expiresAt },
           { consultant_id: consultantId, capability: 'edu', scope: 'default', expires_at: expiresAt },
+          { consultant_id: consultantId, capability: 'capacity', scope: 'default', expires_at: expiresAt },
         ],
       })
       return
@@ -318,6 +351,31 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    // Capacity own-profile fetch (ADR-016, PROMPT-36): returns whatever is
+    // currently stored for `consultant_id`, seeding it from `PROFILE_FIXTURE`
+    // on first access — matches
+    // `crates/nexus-client/src/capacity.rs`'s bare-object (no envelope)
+    // response shape.
+    if (method === 'GET' && url.pathname === '/capacity/v1/profile') {
+      const consultantId = url.searchParams.get('consultant_id') ?? 'unknown-consultant'
+      const profile = capacityProfiles.get(consultantId) ?? PROFILE_FIXTURE
+      capacityProfiles.set(consultantId, profile)
+      sendJson(response, 200, profile)
+      return
+    }
+
+    // Capacity own-profile update (ADR-016, PROMPT-36): always accepts and
+    // overwrites the stored profile with `profile_fields`, matching
+    // `crates/nexus-client/src/capacity.rs`'s `UpdateOwnProfileCommand`/
+    // `ProfileUpdateResult` shapes.
+    if (method === 'POST' && url.pathname === '/capacity/v1/profile') {
+      const body = (await readJsonBody(request)) as { consultant_id: string; profile_fields: ConsultantProfileIntake }
+      capacityProfiles.set(body.consultant_id, body.profile_fields)
+      capacityProfileUpdates.push({ path: url.pathname, body, receivedAt: new Date().toISOString() })
+      sendJson(response, 200, { accepted: true })
+      return
+    }
+
     // Events poll (PROMPT-30/PROMPT-33): `bff-api`'s ingestion polling loop
     // (`crates/bff-api/src/event_ingestion.rs`) expects a bare JSON array
     // of `CapabilityEventReceived`. Drains whatever `_test/enqueue-event`
@@ -357,6 +415,11 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    if (method === 'GET' && url.pathname === '/_test/capacity-profile-updates') {
+      sendJson(response, 200, capacityProfileUpdates)
+      return
+    }
+
     // Test-injection route (PROMPT-33): queues one `CapabilityEventReceived`
     // for the *next* `GET events/v1/poll` to pick up — how
     // `notifications-sse.spec.ts` drives a real Nexus->ingestion->NOTIFY/
@@ -375,6 +438,8 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       proposals.clear()
       proposalActions.length = 0
       catalogRequests.length = 0
+      capacityProfiles.clear()
+      capacityProfileUpdates.length = 0
       sendJson(response, 200, {})
       return
     }

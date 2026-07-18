@@ -317,6 +317,26 @@ mod tests {
         }
     }
 
+    struct UnusedCapacityGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::CapacityGateway for UnusedCapacityGateway {
+        async fn update_own_profile(
+            &self,
+            _consultant_id: &str,
+            _profile_fields: nexus_client::ConsultantProfileIntake,
+        ) -> Result<nexus_client::ProfileUpdateResult, nexus_client::CapacityGatewayError> {
+            unimplemented!("notifications tests never call the capacity gateway")
+        }
+
+        async fn get_own_profile(
+            &self,
+            _consultant_id: &str,
+        ) -> Result<nexus_client::ConsultantProfileIntake, nexus_client::CapacityGatewayError> {
+            unimplemented!("notifications tests never call the capacity gateway")
+        }
+    }
+
     struct UnusedArmorGateway;
 
     #[async_trait::async_trait]
@@ -379,6 +399,8 @@ mod tests {
             commit_query_gateway: Arc::new(UnusedCommitGateway),
             commit_command_gateway: Arc::new(UnusedCommitGateway),
             edu_gateway: Arc::new(UnusedEduGateway),
+            capacity_query_gateway: Arc::new(UnusedCapacityGateway),
+            capacity_command_gateway: Arc::new(UnusedCapacityGateway),
             workflow_session_repository: Arc::new(persistence::PgWorkflowSessionRepository::new(unconnected_pool())),
             notification_repository,
             action_queue_repository,

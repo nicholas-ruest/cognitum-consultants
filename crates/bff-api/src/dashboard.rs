@@ -330,6 +330,28 @@ mod tests {
         }
     }
 
+    /// Stub `CapacityGateway` for dashboard tests, same rationale as
+    /// `UnusedEduGateway` above (PROMPT-36).
+    struct UnusedCapacityGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::CapacityGateway for UnusedCapacityGateway {
+        async fn update_own_profile(
+            &self,
+            _consultant_id: &str,
+            _profile_fields: nexus_client::ConsultantProfileIntake,
+        ) -> Result<nexus_client::ProfileUpdateResult, nexus_client::CapacityGatewayError> {
+            unimplemented!("dashboard tests never call the capacity gateway")
+        }
+
+        async fn get_own_profile(
+            &self,
+            _consultant_id: &str,
+        ) -> Result<nexus_client::ConsultantProfileIntake, nexus_client::CapacityGatewayError> {
+            unimplemented!("dashboard tests never call the capacity gateway")
+        }
+    }
+
     async fn migrated_pool() -> (persistence::Pool, testcontainers_modules::testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.expect("failed to start postgres container");
         let host = container.get_host().await.expect("failed to resolve container host");
@@ -392,6 +414,8 @@ mod tests {
             commit_query_gateway: Arc::new(UnusedCommitGateway),
             commit_command_gateway: Arc::new(UnusedCommitGateway),
             edu_gateway: Arc::new(UnusedEduGateway),
+            capacity_query_gateway: Arc::new(UnusedCapacityGateway),
+            capacity_command_gateway: Arc::new(UnusedCapacityGateway),
             workflow_session_repository,
             notification_repository,
             action_queue_repository,

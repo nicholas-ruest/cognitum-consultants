@@ -15,6 +15,7 @@
 //!   `retry`'s module docs for why writes must never be auto-retried.
 
 pub mod armor;
+pub mod capacity;
 pub mod circuit_breaker;
 pub mod commit;
 pub mod edu;
@@ -25,6 +26,7 @@ pub mod timeout;
 pub mod transport;
 
 pub use armor::{ArmorGateway, ArmorGatewayError, NexusArmorGateway, PermissionAssertion};
+pub use capacity::{CapacityGateway, CapacityGatewayError, ConsultantProfileIntake, NexusCapacityGateway, ProfileUpdateResult};
 pub use circuit_breaker::{CircuitBreaker, CircuitBreakingTransport, CircuitState, SlidingWindowCircuitBreaker};
 pub use commit::{CommitGateway, CommitGatewayError, NexusCommitGateway, ProposalSummary};
 pub use edu::{EduGateway, EduGatewayError, LearningSnapshot, NexusEduGateway};

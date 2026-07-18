@@ -115,6 +115,21 @@ pub struct AppState {
     /// timeout budget, safely serves the whole trait. See
     /// `crate::edu`/`nexus_client::edu` module docs.
     pub edu_gateway: Arc<dyn nexus_client::EduGateway>,
+    /// Capacity ACL gateway (ADR-016, PROMPT-36) used for
+    /// `CapacityGateway::get_own_profile` — the idempotent-read call.
+    /// Mirrors [`Self::sales_query_gateway`]/[`Self::commit_query_gateway`]'s
+    /// split rationale exactly: see `crate::capacity`/`nexus_client::capacity`
+    /// module docs for why this is a *separate* `NexusCapacityGateway`
+    /// instance from [`Self::capacity_command_gateway`] rather than one
+    /// shared field.
+    pub capacity_query_gateway: Arc<dyn nexus_client::CapacityGateway>,
+    /// Capacity ACL gateway (ADR-016, PROMPT-36) used for
+    /// `CapacityGateway::update_own_profile` — a non-idempotent
+    /// side-effecting command that must never be auto-retried. Deliberately
+    /// a different gateway *instance* than [`Self::capacity_query_gateway`]
+    /// even though both implement the same [`nexus_client::CapacityGateway`]
+    /// trait — see `crate::capacity` module docs.
+    pub capacity_command_gateway: Arc<dyn nexus_client::CapacityGateway>,
     /// Repository for [`bff_core::CrossCapabilityWorkflowSession`]
     /// (PROMPT-22/34, ADR-010). PROMPT-22 only built the aggregate +
     /// repository; PROMPT-34 is the first real BFF consumer

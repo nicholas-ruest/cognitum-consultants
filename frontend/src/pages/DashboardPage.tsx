@@ -3,6 +3,7 @@ import { CardGrid } from '../components/CardGrid'
 import { Header } from '../components/Header'
 import { Layout } from '../components/Layout'
 import { navItemsFromAssertions, Sidebar } from '../components/Sidebar'
+import { ProfileEditForm } from '../features/capacity/ProfileEditForm'
 import { ProposalWorkspace } from '../features/commit/ProposalWorkspace'
 import { LearningDashboard } from '../features/edu/LearningDashboard'
 import { ActionQueue } from '../features/notifications/ActionQueue'
@@ -27,10 +28,11 @@ export interface DashboardPageProps {
  * Renders one `Card` per entry in `GET /api/dashboard`'s `cards` array,
  * labeled by `module_id` (capitalized). The `"sales"` card (PROMPT-26) hosts
  * the real `LeadConflictCheck` feature module, the `"commit"` card
- * (PROMPT-34) hosts the real `ProposalWorkspace` feature module, and the
+ * (PROMPT-34) hosts the real `ProposalWorkspace` feature module, the
  * `"edu"` card (PROMPT-35) hosts the real `LearningDashboard` feature
- * module; every other `module_id` still renders a placeholder — their
- * feature modules don't exist yet (PROMPT-36+). Keeps the PROMPT-18 "You are logged in as ..." line too
+ * module, and the `"capacity"` card (PROMPT-36) hosts the real
+ * `ProfileEditForm` feature module; every other `module_id` still renders a
+ * placeholder — their feature modules don't exist yet (PROMPT-37+). Keeps the PROMPT-18 "You are logged in as ..." line too
  * (this unit's "replace or keep both" choice: keep both) since it's cheap,
  * still true, and no acceptance criterion asks for its removal.
  *
@@ -88,6 +90,8 @@ export function DashboardPage({ session }: DashboardPageProps) {
                     <ProposalWorkspace />
                   ) : card.module_id === 'edu' ? (
                     <LearningDashboard />
+                  ) : card.module_id === 'capacity' ? (
+                    <ProfileEditForm />
                   ) : (
                     <p className="text-xs text-gray-500">no live data yet</p>
                   )}
