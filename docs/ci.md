@@ -1,9 +1,10 @@
 # CI
 
 CI is defined at [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) and runs on every push and pull
-request targeting `main`. Two jobs run in parallel; a PR cannot merge unless both jobs, and every step within
-them, succeed. Each step is a separate, named CI step, so a failure is directly attributable to the command
-that failed.
+request targeting `main`. Three jobs run: `rust` and `frontend` run in parallel; `e2e` (PROMPT-27) declares
+`needs: [rust, frontend]` and only starts once both finish, giving it the "slower cadence" ADR-013 §6 calls
+for. A PR cannot merge unless all three jobs, and every step within them, succeed. Each step is a separate,
+named CI step, so a failure is directly attributable to the command that failed.
 
 ## `rust` job
 
@@ -35,18 +36,50 @@ Working directory: `frontend/`. Node via `actions/setup-node` (Node 24), with `n
 4. `npm run test` — runs `vitest run` (ADR-013 layer 4: component/unit tests via Vitest + React Testing
    Library); must report zero failures.
 
-Playwright e2e (ADR-013 layer 5, `frontend/e2e/`) is **not yet run in CI**. It requires a served app (built
-frontend, and eventually the BFF/mocked Nexus) rather than the bare `npm run dev` the local harness uses;
-wiring that up is explicitly deferred to U27 (Sales lead-conflict e2e), which establishes the reusable
-Playwright CI pattern. Until then, `npm run test:e2e` (`playwright test`) is a local-only smoke check.
+Playwright e2e (ADR-013 layer 5, `frontend/e2e/`) now runs in CI as the separate `e2e` job below — it is no
+longer local-only.
+
+## `e2e` job (PROMPT-27)
+
+Working directory: `frontend/` (checkout is the whole repo — this job also builds the Rust workspace).
+`needs: [rust, frontend]`.
+
+Brings up the **full real stack** and drives it with Playwright:
+
+1. Install the Rust stable toolchain (`dtolnay/rust-toolchain@stable`) and cache the cargo registry/`target/`
+   (`Swatinem/rust-cache`) — `bff-api` is built for real, not mocked, by this job.
+2. Install Node.js (Node 24) and run `npm ci` in `frontend/`.
+3. `npx playwright install --with-deps chromium` — installs the browser binary this job's one configured
+   project (`chromium`) needs.
+4. `npx playwright test` — runs every spec under `frontend/e2e/`. `playwright.config.ts`'s `globalSetup`
+   (`frontend/e2e/support/global-setup.ts`) orchestrates everything the specs need *before* any test runs:
+   - A throwaway Postgres container (`docker run postgres:17-alpine`, per `frontend/e2e/support/test-stack.ts`)
+     — the same "GitHub-hosted `ubuntu-latest` ships Docker preinstalled" assumption the `rust` job's
+     `testcontainers`-based tests already rely on, just invoked from Node instead of Rust.
+   - That Postgres instance migrated by applying every `crates/persistence/migrations/*.up.sql` file directly
+     via `psql` (not `sqlx migrate run` — see `test-stack.ts`'s doc comment for why raw SQL was chosen over
+     depending on `sqlx-cli` being installed).
+   - A mock Nexus HTTP server (`frontend/e2e/support/mock-nexus-server.ts`, ADR-007) standing in for
+     `nexus.cognitum.one` at the HTTP boundary — plain `node:http`, no added dependency.
+   - `cargo build -p bff-api`, then the resulting binary spawned with `DATABASE_URL`/`NEXUS_ENDPOINT_URL`
+     pointed at the two services above.
+   - Playwright's own pre-existing `webServer` (the real Vite dev server, `npm run dev`) around all of that,
+     proxying `/api/*` to the now-live `bff-api` (`frontend/vite.config.ts`'s existing proxy config —
+     unchanged, since it already targets `127.0.0.1:3000`, the port `bff-api` binds to either way).
+5. On failure, the Playwright HTML report (`frontend/playwright-report/`) is uploaded as a build artifact
+   (`actions/upload-artifact@v4`) for post-mortem inspection.
+
+See [`docs/SALES_FLOW_PATTERN.md`](SALES_FLOW_PATTERN.md) §5 for how this fits into the full testing pyramid,
+and for the reference this job's orchestration modules (`e2e/support/*`) are meant to be reused by Phase 4's
+own e2e specs (PROMPT-34+) with no changes beyond a new spec file.
 
 ## Governing ADRs
 
 - [ADR-013: Testing Strategy](../.plans/adr/ADR-013-testing-strategy.md) — §6 defines this CI gating layer;
-  Playwright e2e tests (layer 5) are intentionally out of scope for this workflow and run on a slower cadence
-  once added (see U27).
+  Playwright e2e tests (layer 5) run on the slower cadence the `e2e` job's `needs: [rust, frontend]` gives it.
 - [ADR-002: Primary Language Rust, Secondary TypeScript](../.plans/adr/ADR-002-primary-language-rust-secondary-typescript.md)
-  — explains why CI has exactly two toolchain surfaces (Rust + Node/TS) rather than more.
+  — explains why CI has exactly two toolchain surfaces (Rust + Node/TS) rather than more; `e2e` uses both in
+  one job because the flow it drives spans both.
 
 ## Running the gates locally
 
@@ -62,5 +95,9 @@ npm ci
 npm run build
 npm run lint
 npm run test          # Vitest (layer 4)
-npm run test:e2e      # Playwright (layer 5); needs `npx playwright install --with-deps` once
+
+# E2E (layer 5) — needs a reachable Docker daemon and `cargo`/`sqlx` etc. on
+# PATH (`~/.cargo/bin`, per `crates/persistence/README.md`); Playwright
+# browsers install once with `npx playwright install --with-deps`.
+npm run test:e2e
 ```

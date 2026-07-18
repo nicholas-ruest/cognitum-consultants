@@ -78,7 +78,63 @@ jobs:
       - name: npm run test (Vitest)
         run: npm run test
 
-      # Playwright e2e (layer 5, ADR-013 §6) is intentionally NOT run here yet.
-      # TODO(U27): wire a Playwright CI job once the Sales lead-conflict e2e
-      # flow lands — it needs a built/served app (frontend + BFF, or mocked
-      # Nexus) rather than just `npm run dev`, which this job does not stand up.
+  # PROMPT-27: Playwright e2e (ADR-013 layer 5, canonical smoke test).
+  # `needs: [rust, frontend]` both expresses the real dependency (this job
+  # builds the same Rust workspace and frontend package those jobs already
+  # validated) and gives this heavier, real-stack job the "slower cadence"
+  # ADR-013 §6 calls for — it only starts once the fast unit-level gates
+  # have already passed, rather than racing them.
+  e2e:
+    name: E2E (Playwright, full stack)
+    runs-on: ubuntu-latest
+    needs: [rust, frontend]
+    # See the `rust` job's comment: ubuntu-latest ships Docker Engine
+    # preinstalled and reachable with no extra setup. This job's
+    # `playwright.config.ts` globalSetup (`frontend/e2e/support/global-setup.ts`)
+    # uses that Docker daemon directly (`docker run postgres:17-alpine`) to
+    # bring up a throwaway, migrated Postgres instance — the same "real
+    # Postgres, no manual setup" pattern the `rust` job's testcontainers-based
+    # tests already rely on, just invoked from Node instead of Rust.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Playwright browsers (chromium)
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      # Drives the full real stack per-spec via `playwright.config.ts`'s
+      # `globalSetup`: real Vite-served frontend (the pre-existing
+      # `webServer`), real `bff-api` (built here, from this checkout), real
+      # (throwaway, migrated) Postgres, with Nexus mocked at the HTTP
+      # boundary (`frontend/e2e/support/mock-nexus-server.ts`). `CI=true` is
+      # set by GitHub Actions automatically, which `playwright.config.ts`'s
+      # `webServer.reuseExistingServer` already keys off of.
+      - name: npx playwright test (e2e)
+        working-directory: frontend
+        run: npx playwright test
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
