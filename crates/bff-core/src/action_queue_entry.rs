@@ -388,6 +388,22 @@ pub trait ActionQueueRepository: Send + Sync {
     /// LISTEN bridge context (ADR-014, PROMPT-32).
     async fn find_by_id(&self, id: Uuid) -> Result<Option<ActionQueueEntry>, crate::RepoError>;
 
+    /// Looks up the single entry an ingested `(origin_capability,
+    /// origin_event_id)` pair created — the repository interface
+    /// `../ddd/consultant-experience-context.md` §2.4 names but PROMPT-29
+    /// left unimplemented until PROMPT-38 needed it: a later *confirmation*
+    /// event from the owning capability (e.g. Execution's `task_completed`,
+    /// see `event_ingestion::CONFIRMATION_EVENT_TYPES`) does not carry the
+    /// entry's own `id`, only a reference back to the `origin_event_id` that
+    /// originally created it, so completion has to be resolved by this
+    /// lookup rather than [`Self::find_by_id`]. `Ok(None)` — not an error —
+    /// when no entry matches, same leniency contract as [`Self::find_by_id`].
+    async fn find_by_origin_event(
+        &self,
+        origin_capability: &str,
+        origin_event_id: &str,
+    ) -> Result<Option<ActionQueueEntry>, crate::RepoError>;
+
     /// Idempotent-ingestion insert (invariant 1) — same no-op-on-conflict
     /// semantics as `NotificationRepository::save`; see that method's doc
     /// comment for the full rationale.

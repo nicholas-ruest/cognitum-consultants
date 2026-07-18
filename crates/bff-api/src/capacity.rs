@@ -265,6 +265,26 @@ mod tests {
         }
     }
 
+    struct UnusedExecutionGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::ExecutionGateway for UnusedExecutionGateway {
+        async fn request_assigned_engagements(
+            &self,
+            _consultant_id: &str,
+        ) -> Result<Vec<nexus_client::EngagementSnapshot>, nexus_client::ExecutionGatewayError> {
+            unimplemented!("capacity tests never call the execution gateway")
+        }
+
+        async fn confirm_task_completion(
+            &self,
+            _task_id: &str,
+            _consultant_id: &str,
+        ) -> Result<(), nexus_client::ExecutionGatewayError> {
+            unimplemented!("capacity tests never call the execution gateway")
+        }
+    }
+
     enum Outcome<T> {
         Ok(T),
         Err,
@@ -395,6 +415,8 @@ mod tests {
             capacity_query_gateway,
             capacity_command_gateway,
             customer_gateway: Arc::new(UnusedCustomerGateway),
+            execution_query_gateway: Arc::new(UnusedExecutionGateway),
+            execution_command_gateway: Arc::new(UnusedExecutionGateway),
             workflow_session_repository,
             notification_repository,
             action_queue_repository,

@@ -19,22 +19,27 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  *
  * # Fixtures are fixed, not dynamically configurable
  * This server always grants the `"sales"`, `"commit"`, `"edu"`, `"capacity"`,
- * and `"customer"` capabilities (for whichever `consultant_id` is asked
- * about) and always answers a company-claim check for most company names
- * with the `active_owned_account` fixture — `.plans/ddd/anti-corruption-layers.md`
- * §1's worked example, and the same fixture `crates/bff-api/src/sales.rs`'s
- * own integration tests use (`active_owned_account_fixture()`). Edu's
- * `GET /edu/v1/catalog` (PROMPT-35) always answers with the fixed
- * `LEARNING_CATALOG_FIXTURE` below, matching that module's own inline doc
- * comment. Capacity's `GET`/`POST /capacity/v1/profile` (PROMPT-36) serve a
- * single, stateful `PROFILE_FIXTURE` per `consultant_id`: `GET` returns
- * whatever is currently stored (seeded from `PROFILE_FIXTURE`), and `POST`
- * always accepts the update and overwrites the stored profile with it — see
- * the module docs for why a stateful round-trip was chosen over a fixed
+ * `"customer"`, and `"execution"` capabilities (for whichever
+ * `consultant_id` is asked about) and always answers a company-claim check
+ * for most company names with the `active_owned_account` fixture —
+ * `.plans/ddd/anti-corruption-layers.md` §1's worked example, and the same
+ * fixture `crates/bff-api/src/sales.rs`'s own integration tests use
+ * (`active_owned_account_fixture()`). Edu's `GET /edu/v1/catalog`
+ * (PROMPT-35) always answers with the fixed `LEARNING_CATALOG_FIXTURE`
+ * below, matching that module's own inline doc comment. Capacity's
+ * `GET`/`POST /capacity/v1/profile` (PROMPT-36) serve a single, stateful
+ * `PROFILE_FIXTURE` per `consultant_id`: `GET` returns whatever is currently
+ * stored (seeded from `PROFILE_FIXTURE`), and `POST` always accepts the
+ * update and overwrites the stored profile with it — see the module docs
+ * for why a stateful round-trip was chosen over a fixed
  * always-the-same-response fixture for this one capability. Customer's
  * `GET /customer/v1/context` (PROMPT-37) always answers with the fixed
  * `CUSTOMER_CONTEXT_FIXTURE` below, matching Edu's "fixed, not dynamically
- * configurable" pattern.
+ * configurable" pattern. Execution's `GET /execution/v1/engagements`
+ * (PROMPT-38) always answers with the fixed `ENGAGEMENT_SNAPSHOT_FIXTURE`
+ * below, same pattern; `POST /execution/v1/task-completions` records every
+ * request it receives (mirroring `proposalActions`/`referrals` below) so a
+ * spec can assert the BFF forwarded the expected `task_id`/`consultant_id`.
  *
  * # One exception: the `no_match` fixture, by company name (PROMPT-34)
  * `commit-sales-deeplink.spec.ts` needs a `creation_allowed: true` result to
@@ -214,6 +219,41 @@ const CUSTOMER_CONTEXT_FIXTURE: CustomerContextCard[] = [
   },
 ]
 
+/** `EngagementTaskSummary` shape, mirrored from `crates/nexus-client/src/execution.rs` (PROMPT-38). */
+export interface EngagementTaskSummary {
+  task_id: string
+  title: string
+  status: string
+}
+
+/** `EngagementSnapshot` shape, mirrored from `crates/nexus-client/src/execution.rs` (PROMPT-38). */
+export interface EngagementSnapshot {
+  engagement_id: string
+  workstreams: string[]
+  milestones: string[]
+  tasks: EngagementTaskSummary[]
+  delivery_status: string
+  deep_link: string | null
+}
+
+/**
+ * Fixed `GET /execution/v1/engagements` fixture (PROMPT-38): one on-track
+ * engagement with an assigned task, proving the frontend's
+ * list-plus-detail-plus-tasks rendering — mirroring
+ * `CUSTOMER_CONTEXT_FIXTURE`'s "fixed, not dynamically configurable"
+ * rationale above.
+ */
+const ENGAGEMENT_SNAPSHOT_FIXTURE: EngagementSnapshot[] = [
+  {
+    engagement_id: 'engagement-1',
+    workstreams: ['Discovery', 'Delivery'],
+    milestones: ['Kickoff complete'],
+    tasks: [{ task_id: 'task-1', title: 'Draft delivery plan', status: 'assigned' }],
+    delivery_status: 'on_track',
+    deep_link: 'https://execution.cognitum.one/engagements/engagement-1',
+  },
+]
+
 export interface CapabilityEventReceived {
   origin_capability: string
   origin_event_id: string
@@ -222,6 +262,13 @@ export interface CapabilityEventReceived {
   deep_link: string | null
   received_at: string
   consultant_id: string
+  /**
+   * PROMPT-38: only set on confirmation events (e.g. `task_completed`) —
+   * the `origin_event_id` of the original `task_assigned` event this
+   * confirms, mirroring `crates/bff-core/src/event_ingestion.rs`'s
+   * `CapabilityEventReceived::related_origin_event_id`.
+   */
+  related_origin_event_id?: string
 }
 
 export interface MockNexusServer {
@@ -275,6 +322,9 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
   // PROMPT-37: `GET /customer/v1/context` requests, recorded so a spec can
   // confirm which `consultant_id` the BFF forwarded.
   const customerContextRequests: RecordedCommand[] = []
+  // PROMPT-38: `POST /execution/v1/task-completions` requests, recorded so a
+  // spec can confirm the BFF forwarded the expected `task_id`/`consultant_id`.
+  const taskCompletionRequests: RecordedCommand[] = []
   // PROMPT-33 e2e: events queued via `POST /_test/enqueue-event` and
   // drained (returned once, then cleared) on the next `GET
   // events/v1/poll` — see `notifications-sse.spec.ts`. Draining, not
@@ -310,6 +360,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
           { consultant_id: consultantId, capability: 'edu', scope: 'default', expires_at: expiresAt },
           { consultant_id: consultantId, capability: 'capacity', scope: 'default', expires_at: expiresAt },
           { consultant_id: consultantId, capability: 'customer', scope: 'default', expires_at: expiresAt },
+          { consultant_id: consultantId, capability: 'execution', scope: 'default', expires_at: expiresAt },
         ],
       })
       return
@@ -432,6 +483,27 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    // Execution assigned-engagements query (ADR-016, PROMPT-38): always
+    // answers with the fixed `ENGAGEMENT_SNAPSHOT_FIXTURE`, matching
+    // `crates/nexus-client/src/execution.rs`'s `EngagementsEnvelope`
+    // (`{"engagements": [...]}`) convention.
+    if (method === 'GET' && url.pathname === '/execution/v1/engagements') {
+      sendJson(response, 200, { engagements: ENGAGEMENT_SNAPSHOT_FIXTURE })
+      return
+    }
+
+    // Execution task-completion-request command (ADR-016, PROMPT-38): always
+    // accepts and records the request, matching
+    // `crates/nexus-client/src/execution.rs`'s `ConfirmTaskCompletionCommand`
+    // shape — fire-and-confirm, same "no documented ack body" convention as
+    // Sales' `collaboration-requests`/`referrals` above.
+    if (method === 'POST' && url.pathname === '/execution/v1/task-completions') {
+      const body = await readJsonBody(request)
+      taskCompletionRequests.push({ path: url.pathname, body, receivedAt: new Date().toISOString() })
+      sendJson(response, 200, { accepted: true })
+      return
+    }
+
     // Events poll (PROMPT-30/PROMPT-33): `bff-api`'s ingestion polling loop
     // (`crates/bff-api/src/event_ingestion.rs`) expects a bare JSON array
     // of `CapabilityEventReceived`. Drains whatever `_test/enqueue-event`
@@ -481,6 +553,11 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    if (method === 'GET' && url.pathname === '/_test/task-completion-requests') {
+      sendJson(response, 200, taskCompletionRequests)
+      return
+    }
+
     // Test-injection route (PROMPT-33): queues one `CapabilityEventReceived`
     // for the *next* `GET events/v1/poll` to pick up — how
     // `notifications-sse.spec.ts` drives a real Nexus->ingestion->NOTIFY/
@@ -502,6 +579,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       capacityProfiles.clear()
       capacityProfileUpdates.length = 0
       customerContextRequests.length = 0
+      taskCompletionRequests.length = 0
       sendJson(response, 200, {})
       return
     }

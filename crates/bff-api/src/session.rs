@@ -141,6 +141,21 @@ pub struct AppState {
     /// [`Self::edu_gateway`]. See `crate::customer`/`nexus_client::customer`
     /// module docs.
     pub customer_gateway: Arc<dyn nexus_client::CustomerGateway>,
+    /// Execution ACL gateway (ADR-016, PROMPT-38) used for
+    /// `ExecutionGateway::request_assigned_engagements` — the idempotent-read
+    /// call. Mirrors [`Self::sales_query_gateway`]/[`Self::commit_query_gateway`]/
+    /// [`Self::capacity_query_gateway`]'s split rationale exactly: see
+    /// `crate::execution`/`nexus_client::execution` module docs for why this
+    /// is a *separate* `NexusExecutionGateway` instance from
+    /// [`Self::execution_command_gateway`] rather than one shared field.
+    pub execution_query_gateway: Arc<dyn nexus_client::ExecutionGateway>,
+    /// Execution ACL gateway (ADR-016, PROMPT-38) used for
+    /// `ExecutionGateway::confirm_task_completion` — a non-idempotent
+    /// side-effecting command that must never be auto-retried. Deliberately
+    /// a different gateway *instance* than [`Self::execution_query_gateway`]
+    /// even though both implement the same [`nexus_client::ExecutionGateway`]
+    /// trait — see `crate::execution` module docs.
+    pub execution_command_gateway: Arc<dyn nexus_client::ExecutionGateway>,
     /// Repository for [`bff_core::CrossCapabilityWorkflowSession`]
     /// (PROMPT-22/34, ADR-010). PROMPT-22 only built the aggregate +
     /// repository; PROMPT-34 is the first real BFF consumer

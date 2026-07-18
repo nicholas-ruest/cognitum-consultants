@@ -6,6 +6,7 @@ mod dashboard;
 mod edu;
 mod event_ingestion;
 mod event_notify_bridge;
+mod execution;
 mod health;
 mod metrics;
 mod notifications;
@@ -191,6 +192,31 @@ async fn main() {
     let customer_gateway: Arc<dyn nexus_client::CustomerGateway> =
         Arc::new(nexus_client::NexusCustomerGateway::new(customer_transport));
 
+    // Execution ACL gateway (ADR-016, PROMPT-38): same shared-base-transport,
+    // two-instances split as Sales/Commit/Capacity above — see
+    // `execution`/`nexus_client::execution` module docs for the full
+    // decision writeup. `request_assigned_engagements` gets the read timeout
+    // + retry (idempotent, page-load-ish); `confirm_task_completion` gets
+    // the write timeout, no retry (a non-idempotent command).
+    let execution_base_transport = nexus_client::ReqwestNexusTransport::new(&cfg.nexus_endpoint_url)
+        .unwrap_or_else(|err| panic!("invalid nexus_endpoint_url {:?}: {err}", cfg.nexus_endpoint_url));
+    let execution_base_transport: Arc<dyn nexus_client::NexusTransport> = Arc::new(execution_base_transport);
+
+    let execution_query_timeout_transport = Arc::new(nexus_client::TimeoutTransport::new(
+        execution_base_transport.clone(),
+        nexus_client::DEFAULT_READ_TIMEOUT,
+    ));
+    let execution_query_transport: Arc<dyn nexus_client::NexusTransport> =
+        Arc::new(nexus_client::RetryingTransport::with_default_retries(execution_query_timeout_transport));
+    let execution_query_gateway: Arc<dyn nexus_client::ExecutionGateway> =
+        Arc::new(nexus_client::NexusExecutionGateway::new(execution_query_transport));
+
+    let execution_command_transport: Arc<dyn nexus_client::NexusTransport> = Arc::new(
+        nexus_client::TimeoutTransport::new(execution_base_transport, nexus_client::DEFAULT_WRITE_TIMEOUT),
+    );
+    let execution_command_gateway: Arc<dyn nexus_client::ExecutionGateway> =
+        Arc::new(nexus_client::NexusExecutionGateway::new(execution_command_transport));
+
     // PROMPT-22/34, ADR-010: the Postgres-backed `CrossCapabilityWorkflowSession`
     // repository — PROMPT-22 built this, but no BFF route consumed it until
     // this unit (`workflow_sessions::workflow_sessions_router`,
@@ -285,6 +311,8 @@ async fn main() {
         capacity_query_gateway,
         capacity_command_gateway,
         customer_gateway,
+        execution_query_gateway,
+        execution_command_gateway,
         workflow_session_repository,
         notification_repository,
         action_queue_repository,
@@ -315,7 +343,11 @@ async fn main() {
     // `edu::edu_router` adds `GET /api/edu/catalog` (PROMPT-35).
     // `capacity::capacity_router` adds `GET`/`PATCH /api/capacity/profile`
     // (PROMPT-36). `customer::customer_router` adds
-    // `GET /api/customer/assigned` (PROMPT-37).
+    // `GET /api/customer/assigned` (PROMPT-37). `execution::execution_router`
+    // adds `GET /api/execution/engagements` and
+    // `POST /api/execution/tasks/{id}/complete` (PROMPT-38) — see that
+    // module's docs for why the latter never touches `ActionQueueEntry`
+    // state directly.
     let api_router = Router::new()
         .route("/login/dev", post(session::login_dev))
         .merge(session::protected_router(state.clone()))
@@ -326,6 +358,7 @@ async fn main() {
         .merge(edu::edu_router(state.clone()))
         .merge(capacity::capacity_router(state.clone()))
         .merge(customer::customer_router(state.clone()))
+        .merge(execution::execution_router(state.clone()))
         .merge(workflow_sessions::workflow_sessions_router(state.clone()))
         .merge(notifications_sse::notifications_router(state.clone()))
         .merge(notifications::notifications_write_router(state.clone()));

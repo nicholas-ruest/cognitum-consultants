@@ -11,22 +11,24 @@
  * which is exactly the mechanism ADR-015 wires up to ADR-011's SSE-pushed
  * updates.
  *
- * `sales`, `commit`, `edu`, `capacity`, and `customer` have concrete example
- * keys below (`conflicts`/`proposals`/`catalog`/`profile`/`assigned`) —
+ * `sales`, `commit`, `edu`, `capacity`, `customer`, and `execution` have
+ * concrete example keys below
+ * (`conflicts`/`proposals`/`catalog`/`profile`/`assigned`/`engagements`) —
  * those mirror the actual reference flow in
- * `../ddd/anti-corruption-layers.md` §1/§2/§3/§4/§5 and the literal examples
- * in PROMPT-16/ADR-015.
+ * `../ddd/anti-corruption-layers.md` §1/§2/§3/§4/§5/§6 and the literal
+ * examples in PROMPT-16/ADR-015.
  *
- * The other four capabilities (`execution`, `products`, `landscape`,
- * `legal`) have no routes and no settled resource shape yet (PROMPT-38+) —
- * inventing named keys for them now would fabricate business meaning that
- * doesn't exist. Instead each exposes `all` (for capability-wide
- * invalidation) and a generic `resource()` builder that follows the same
+ * The other three capabilities (`products`, `landscape`, `legal`) have no
+ * routes and no settled resource shape yet (PROMPT-39+) — inventing named
+ * keys for them now would fabricate business meaning that doesn't exist.
+ * Instead each exposes `all` (for capability-wide invalidation) and a
+ * generic `resource()` builder that follows the same
  * [capability, resource, consultantId, ...rest] shape. Once a capability's
  * real routes land, replace its `resource()` calls with named, typed
  * methods the same way `sales.conflicts`, `commit.proposals`, `edu.catalog`,
- * `capacity.profile`, and `customer.assigned` are done, and keep
- * `resource()` around only if it's still useful for ad hoc/rare lookups.
+ * `capacity.profile`, `customer.assigned`, and `execution.engagements` are
+ * done, and keep `resource()` around only if it's still useful for ad hoc/
+ * rare lookups.
  */
 
 export const CAPABILITIES = [
@@ -97,7 +99,8 @@ export const queryKeys = {
   },
   execution: {
     all: capabilityRoot('execution'),
-    resource: genericResource('execution'),
+    /** `GET /api/execution/engagements` (PROMPT-38) query key. */
+    engagements: (consultantId: string) => capabilityKey('execution', 'engagements', consultantId),
   },
   products: {
     all: capabilityRoot('products'),

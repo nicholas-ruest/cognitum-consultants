@@ -16,13 +16,15 @@
 //! actions — marking a notification read, starting/completing an
 //! action-queue entry — are explicitly **not** part of this channel; ADR-011
 //! calls them out as ordinary `POST`/`PATCH` request/response calls instead.
-//! **As of this unit, no such write-side REST endpoints exist yet** in this
-//! crate (`grep` the crate for `mark_read`/`mark_started`/`mark_completed`
-//! call sites — the only callers are the repository trait definitions in
-//! `bff-core` and their Postgres implementations in `persistence`; nothing
-//! in `bff-api` invokes them). That is expected and out of scope here: this
-//! unit's acceptance criteria list only the stream endpoint. This module
-//! does not implement, assume, or depend on those endpoints existing.
+//! **As of this unit (PROMPT-31), no such write-side REST endpoints exist
+//! yet** in this crate. That was expected and out of scope for this unit:
+//! its acceptance criteria list only the stream endpoint. This module does
+//! not implement, assume, or depend on those endpoints existing.
+//! (`crate::notifications`'s `mark_read`/`action_queue_start` routes landed
+//! in PROMPT-33; `mark_completed`'s only caller is
+//! `bff_core::event_ingestion::ingest_confirmation` — reached from Nexus's
+//! ingestion pipeline, never a route handler, per PROMPT-38's invariant-3
+//! requirement — see `crate::execution`'s module docs.)
 //!
 //! # Wire format
 //! Each SSE `data:` line is a single JSON object, tagged by a `"kind"`
@@ -321,6 +323,26 @@ mod tests {
         }
     }
 
+    struct UnusedExecutionGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::ExecutionGateway for UnusedExecutionGateway {
+        async fn request_assigned_engagements(
+            &self,
+            _consultant_id: &str,
+        ) -> Result<Vec<nexus_client::EngagementSnapshot>, nexus_client::ExecutionGatewayError> {
+            unimplemented!("notifications_sse tests never call the execution gateway")
+        }
+
+        async fn confirm_task_completion(
+            &self,
+            _task_id: &str,
+            _consultant_id: &str,
+        ) -> Result<(), nexus_client::ExecutionGatewayError> {
+            unimplemented!("notifications_sse tests never call the execution gateway")
+        }
+    }
+
     fn dev_config() -> config::Config {
         config::Config {
             database_url: "postgres://localhost:5432/test".to_owned(),
@@ -364,6 +386,8 @@ mod tests {
             capacity_query_gateway: Arc::new(UnusedCapacityGateway),
             capacity_command_gateway: Arc::new(UnusedCapacityGateway),
             customer_gateway: Arc::new(UnusedCustomerGateway),
+            execution_query_gateway: Arc::new(UnusedExecutionGateway),
+            execution_command_gateway: Arc::new(UnusedExecutionGateway),
             workflow_session_repository: Arc::new(persistence::PgWorkflowSessionRepository::new(pool.clone())),
             notification_repository,
             action_queue_repository,

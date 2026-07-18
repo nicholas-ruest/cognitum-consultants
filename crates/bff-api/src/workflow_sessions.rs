@@ -266,6 +266,26 @@ mod tests {
         }
     }
 
+    struct UnusedExecutionGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::ExecutionGateway for UnusedExecutionGateway {
+        async fn request_assigned_engagements(
+            &self,
+            _consultant_id: &str,
+        ) -> Result<Vec<nexus_client::EngagementSnapshot>, nexus_client::ExecutionGatewayError> {
+            unimplemented!("workflow_sessions tests never call the execution gateway")
+        }
+
+        async fn confirm_task_completion(
+            &self,
+            _task_id: &str,
+            _consultant_id: &str,
+        ) -> Result<(), nexus_client::ExecutionGatewayError> {
+            unimplemented!("workflow_sessions tests never call the execution gateway")
+        }
+    }
+
     async fn migrated_pool() -> (persistence::Pool, testcontainers_modules::testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.expect("failed to start postgres container");
         let host = container.get_host().await.expect("failed to resolve container host");
@@ -321,6 +341,8 @@ mod tests {
             capacity_query_gateway: Arc::new(UnusedCapacityGateway),
             capacity_command_gateway: Arc::new(UnusedCapacityGateway),
             customer_gateway: Arc::new(UnusedCustomerGateway),
+            execution_query_gateway: Arc::new(UnusedExecutionGateway),
+            execution_command_gateway: Arc::new(UnusedExecutionGateway),
             workflow_session_repository,
             notification_repository: Arc::new(persistence::PgNotificationRepository::new(pool.clone())),
             action_queue_repository: Arc::new(persistence::PgActionQueueRepository::new(pool.clone())),

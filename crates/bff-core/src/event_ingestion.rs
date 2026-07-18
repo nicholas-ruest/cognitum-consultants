@@ -47,7 +47,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::{
-    ActionQueueEntry, ActionQueueEntryError, ActionQueueRepository, NotificationItem,
+    ActionQueueEntry, ActionQueueEntryError, ActionQueueRepository, ActionState, NotificationItem,
     NotificationItemError, NotificationRepository, RepoError, SaveOutcome,
 };
 
@@ -82,6 +82,15 @@ pub struct CapabilityEventReceived {
     /// **Provisional addition beyond `../ddd/domain-events.md` §2's rough
     /// payload sketch** — see the module docs for the full rationale.
     pub consultant_id: String,
+    /// **PROMPT-38 addition, confirmation events only.** The `origin_event_id`
+    /// of the *original* event that created the `ActionQueueEntry` this event
+    /// confirms (e.g. the `task_assigned` event's own `origin_event_id`) —
+    /// see [`CONFIRMATION_EVENT_TYPES`]'s doc comment for the full rationale.
+    /// `None`/absent for every ordinary notification- or action-classified
+    /// event; `#[serde(default)]` so existing payloads that predate this
+    /// field still deserialize.
+    #[serde(default)]
+    pub related_origin_event_id: Option<String>,
 }
 
 /// Whether a [`CapabilityEventReceived`] implies a required consultant
@@ -91,6 +100,12 @@ pub struct CapabilityEventReceived {
 pub enum EventClassification {
     Notification,
     Action,
+    /// **PROMPT-38 addition.** The event is the owning capability's
+    /// confirmation that a previously-created [`ActionQueueEntry`] is
+    /// actually done — see [`CONFIRMATION_EVENT_TYPES`]'s doc comment. Never
+    /// creates a new aggregate; routes to [`ingest_confirmation`] instead of
+    /// [`ingest_notification`]/[`ingest_action`].
+    Confirmation,
 }
 
 /// Known `event_type`s that imply a required consultant action, per
@@ -168,12 +183,72 @@ pub enum EventClassification {
 ///
 /// Neither is added to [`ACTION_EVENT_TYPES`]; both classify as
 /// [`EventClassification::Notification`] via the existing default.
+///
+/// # PROMPT-38 (Execution ACL) additions: `delivery_risk_raised` (plus the
+/// already-listed `task_assigned`)
+/// Execution's three inbound events (`anti-corruption-layers.md` §6:
+/// `MilestoneCompleted`, `DeliveryRiskRaised`, `TaskAssigned`) were each
+/// individually judged the same way, and the doc itself names two of the
+/// three as "natural `ActionQueueEntry` sources":
+/// - `MilestoneCompleted` -> **notification**. Like `ProposalCreated`/
+///   `CourseCompleted`, a completed milestone is a receipt of something that
+///   already happened, not a prompt for the consultant to now go do
+///   something.
+/// - `DeliveryRiskRaised` -> **action** (added to this list). A newly
+///   flagged delivery risk concretely names something the consultant must
+///   now go address — the same "names one concrete action" reasoning
+///   `task_assigned`'s own doc comment above already establishes.
+/// - `TaskAssigned` -> **action**. Already present in this list since
+///   PROMPT-30's own worked example (Execution's event of the same name
+///   needs no separate entry) — per PROMPT-38's own prompt text, this is
+///   also explicitly called out as an `ActionQueueEntry` source requiring
+///   **confirmed completion via the owning capability, not a local state
+///   flip**: no *route handler* anywhere in this repo ever calls
+///   [`crate::ActionQueueEntry::complete`]/
+///   [`crate::ActionQueueRepository::mark_completed`] — see
+///   `bff-api::execution`'s module docs for how a consultant-initiated
+///   completion *request* is routed to Execution without touching this
+///   aggregate's state directly. The only caller of `mark_completed` in this
+///   entire repo is [`ingest_confirmation`] below, reached exclusively via a
+///   `task_completed` confirmation event ingested through this same
+///   classify-and-route pipeline — see [`CONFIRMATION_EVENT_TYPES`].
 const ACTION_EVENT_TYPES: &[&str] = &[
     "task_assigned",
     "collaboration_request_acknowledged",
     "proposal_accepted",
     "training_requirement_due",
+    "delivery_risk_raised",
 ];
+
+/// Known `event_type`s that confirm a previously-created [`ActionQueueEntry`]
+/// is actually done, per invariant 3 (`../ddd/consultant-experience-context.md`
+/// §2.2): "`completed` may only be set in response to a confirmation event
+/// routed back through Nexus from the owning capability." Matched the same
+/// case/separator-insensitive way as [`ACTION_EVENT_TYPES`] (see
+/// [`normalize_event_type`]).
+///
+/// # PROMPT-38 addition: `task_completed`
+/// Neither `../ddd/domain-events.md` §3 (Execution) nor
+/// `../ddd/anti-corruption-layers.md` §6 names an explicit "task completed"
+/// inbound event — the closest named event, `MilestoneCompleted`, is scoped
+/// to milestones, not individual tasks, and carries no `task_id` to
+/// correlate back to a `TaskAssigned`-created entry. Invariant 3 is explicit
+/// that completion *requires* a confirming event to exist, though
+/// (`consultant-experience-context.md` §2.2), and PROMPT-38's own prompt
+/// text calls this out directly: "Action queue completion requires a
+/// confirmation event from Execution." Rather than leave that invariant
+/// unimplementable, `task_completed` is added here as a flagged, provisional
+/// assumption — the natural, symmetric counterpart to `task_assigned`
+/// (same naming convention, same capability) — pending Nexus's actual
+/// Execution event contract confirming or correcting the exact name. See
+/// [`CapabilityEventReceived::related_origin_event_id`]'s doc comment for
+/// how this event correlates back to the entry it confirms, and
+/// [`ingest_confirmation`] for the completion logic itself.
+///
+/// **This list is expected to grow** exactly as [`ACTION_EVENT_TYPES`]'s own
+/// doc comment describes — each capability with its own completion-implying
+/// event(s) should add its normalized `event_type`(s) here as it integrates.
+const CONFIRMATION_EVENT_TYPES: &[&str] = &["task_completed"];
 
 /// Normalizes an `event_type` for matching against [`ACTION_EVENT_TYPES`]:
 /// lowercases and strips non-alphanumeric separators, so `"task_assigned"`,
@@ -189,7 +264,9 @@ fn normalize_event_type(event_type: &str) -> String {
 /// deliberate).
 pub fn classify(event_type: &str) -> EventClassification {
     let normalized = normalize_event_type(event_type);
-    if ACTION_EVENT_TYPES.iter().any(|known| normalize_event_type(known) == normalized) {
+    if CONFIRMATION_EVENT_TYPES.iter().any(|known| normalize_event_type(known) == normalized) {
+        EventClassification::Confirmation
+    } else if ACTION_EVENT_TYPES.iter().any(|known| normalize_event_type(known) == normalized) {
         EventClassification::Action
     } else {
         EventClassification::Notification
@@ -403,6 +480,15 @@ pub enum IngestionOutcome {
     /// panics or aborts the rest of the batch — one malformed/failed event
     /// must not block ingestion of the others in the same poll.
     Rejected { origin_capability: String, origin_event_id: String, reason: String },
+    /// **PROMPT-38 addition.** A [`EventClassification::Confirmation`] event
+    /// was processed against [`ActionQueueEntry`] via [`ingest_confirmation`].
+    /// `transitioned` distinguishes "found the entry and moved it to
+    /// `Completed`" from "found nothing to do" (no matching entry, or the
+    /// entry wasn't `InProgress`) — both are legitimate, non-error outcomes,
+    /// not [`IngestionOutcome::Rejected`]: a redelivered confirmation, or one
+    /// that races ahead of the consultant clicking "take action", is
+    /// expected traffic, not a failure.
+    Confirmed { origin_capability: String, origin_event_id: String, transitioned: bool },
 }
 
 /// Aggregated result of one [`ingest_events`] call.
@@ -432,6 +518,23 @@ impl IngestionResult {
     /// Number of events rejected (invalid aggregate or repository failure).
     pub fn rejected(&self) -> usize {
         self.outcomes.iter().filter(|o| matches!(o, IngestionOutcome::Rejected { .. })).count()
+    }
+
+    /// Number of confirmation events processed (PROMPT-38), regardless of
+    /// whether they actually transitioned an entry — see
+    /// [`Self::completed_confirmations`] for the narrower count.
+    pub fn confirmed(&self) -> usize {
+        self.outcomes.iter().filter(|o| matches!(o, IngestionOutcome::Confirmed { .. })).count()
+    }
+
+    /// Number of confirmation events that actually moved an
+    /// [`ActionQueueEntry`] to [`ActionState::Completed`] — the narrower,
+    /// "something really happened" count within [`Self::confirmed`].
+    pub fn completed_confirmations(&self) -> usize {
+        self.outcomes
+            .iter()
+            .filter(|o| matches!(o, IngestionOutcome::Confirmed { transitioned: true, .. }))
+            .count()
     }
 }
 
@@ -516,6 +619,9 @@ pub async fn ingest_events(
             EventClassification::Action => {
                 ingest_action(&event, action_queue_repo, publisher).await
             }
+            EventClassification::Confirmation => {
+                ingest_confirmation(&event, action_queue_repo, publisher).await
+            }
         };
         result.outcomes.push(outcome);
     }
@@ -562,6 +668,75 @@ async fn ingest_action(
             saved(event, EventClassification::Action, save_outcome)
         }
         Err(err) => rejected(event, repo_error_reason(err)),
+    }
+}
+
+/// Processes a [`EventClassification::Confirmation`] event: resolves the
+/// [`ActionQueueEntry`] it confirms via [`ActionQueueRepository::find_by_origin_event`]
+/// (keyed by `event.related_origin_event_id`, not `event.origin_event_id` —
+/// see [`CapabilityEventReceived::related_origin_event_id`]'s doc comment)
+/// and, if it is currently [`ActionState::InProgress`], calls
+/// [`ActionQueueRepository::mark_completed`] with the confirmation event's
+/// own `origin_event_id` as the audit-trail `confirmation_event_id`
+/// (invariant 3's required, non-empty proof-of-confirmation argument).
+///
+/// This function — reached only via [`CONFIRMATION_EVENT_TYPES`] — is the
+/// **only** call site of `mark_completed` anywhere in this repo; no route
+/// handler ever calls it directly (see `ACTION_EVENT_TYPES`'s PROMPT-38 doc
+/// comment).
+///
+/// Never creates a new aggregate and never touches [`NotificationRepository`]/
+/// [`ActionQueueRepository::save`] — a confirmation event is not itself an
+/// idempotent-ingestion candidate the way [`ingest_notification`]/
+/// [`ingest_action`]'s events are (there is no new row to dedupe against);
+/// idempotency here instead falls out naturally from
+/// [`ActionQueueEntry::complete`]'s own state-machine guard — a redelivered
+/// confirmation for an already-[`ActionState::Completed`] entry is a no-op
+/// exactly like the first successful call already made it so.
+async fn ingest_confirmation(
+    event: &CapabilityEventReceived,
+    action_queue_repo: &dyn ActionQueueRepository,
+    publisher: &dyn EventPublisher,
+) -> IngestionOutcome {
+    let related_origin_event_id = match event.related_origin_event_id.as_deref().map(str::trim) {
+        Some(id) if !id.is_empty() => id,
+        _ => {
+            return rejected(
+                event,
+                "confirmation event is missing a non-empty related_origin_event_id".to_string(),
+            )
+        }
+    };
+
+    let existing = match action_queue_repo.find_by_origin_event(&event.origin_capability, related_origin_event_id).await {
+        Ok(Some(entry)) => entry,
+        Ok(None) => return confirmed(event, false),
+        Err(err) => return rejected(event, repo_error_reason(err)),
+    };
+
+    if existing.action_state() != ActionState::InProgress {
+        // Legitimate no-op — see the doc comment above and
+        // `IngestionOutcome::Confirmed`'s own doc comment for why this is
+        // not treated as a failure.
+        return confirmed(event, false);
+    }
+
+    match action_queue_repo.mark_completed(existing.id(), &event.origin_event_id).await {
+        Ok(()) => {
+            if let Ok(Some(updated)) = action_queue_repo.find_by_id(existing.id()).await {
+                publisher.publish(IngestedEvent::Action(updated)).await;
+            }
+            confirmed(event, true)
+        }
+        Err(err) => rejected(event, repo_error_reason(err)),
+    }
+}
+
+fn confirmed(event: &CapabilityEventReceived, transitioned: bool) -> IngestionOutcome {
+    IngestionOutcome::Confirmed {
+        origin_capability: event.origin_capability.clone(),
+        origin_event_id: event.origin_event_id.clone(),
+        transitioned,
     }
 }
 
@@ -612,6 +787,16 @@ mod tests {
             deep_link: Some("https://app.example.com/sales/1".to_string()),
             received_at: t0(),
             consultant_id: "consultant-1".to_string(),
+            related_origin_event_id: None,
+        }
+    }
+
+    /// Same shape as [`event`], plus a non-empty `related_origin_event_id` —
+    /// the confirmation-event test helper.
+    fn confirmation_event(origin_event_id: &str, event_type: &str, related_origin_event_id: &str) -> CapabilityEventReceived {
+        CapabilityEventReceived {
+            related_origin_event_id: Some(related_origin_event_id.to_string()),
+            ..event(origin_event_id, event_type)
         }
     }
 
@@ -682,6 +867,14 @@ mod tests {
             Ok(self.rows.lock().unwrap().values().find(|entry| entry.id() == id).cloned())
         }
 
+        async fn find_by_origin_event(
+            &self,
+            origin_capability: &str,
+            origin_event_id: &str,
+        ) -> Result<Option<ActionQueueEntry>, RepoError> {
+            Ok(self.rows.lock().unwrap().get(&(origin_capability.to_string(), origin_event_id.to_string())).cloned())
+        }
+
         async fn save(&self, entry: &ActionQueueEntry) -> Result<SaveOutcome, RepoError> {
             let mut rows = self.rows.lock().unwrap();
             let key = (entry.origin_capability().to_string(), entry.origin_event_id().to_string());
@@ -694,11 +887,30 @@ mod tests {
             }
         }
 
-        async fn mark_started(&self, _id: Uuid) -> Result<(), RepoError> {
+        async fn mark_started(&self, id: Uuid) -> Result<(), RepoError> {
+            let mut rows = self.rows.lock().unwrap();
+            if let Some(entry) = rows.values_mut().find(|entry| entry.id() == id) {
+                // Lenient no-op on an invalid transition, mirroring
+                // `PgActionQueueRepository::mark_started`'s WHERE-guarded
+                // semantics — not an error at this layer.
+                let _ = entry.start();
+            }
             Ok(())
         }
 
-        async fn mark_completed(&self, _id: Uuid, _confirmation_event_id: &str) -> Result<(), RepoError> {
+        async fn mark_completed(&self, id: Uuid, confirmation_event_id: &str) -> Result<(), RepoError> {
+            if confirmation_event_id.trim().is_empty() {
+                return Err(RepoError::OperationFailed(
+                    ActionQueueEntryError::EmptyConfirmationEventId.to_string(),
+                ));
+            }
+            let mut rows = self.rows.lock().unwrap();
+            if let Some(entry) = rows.values_mut().find(|entry| entry.id() == id) {
+                // Lenient no-op on an invalid transition (e.g. still
+                // `Pending`), mirroring `PgActionQueueRepository::mark_completed`'s
+                // WHERE-guarded semantics — not an error at this layer.
+                let _ = entry.complete(confirmation_event_id);
+            }
             Ok(())
         }
 
@@ -997,6 +1209,217 @@ mod tests {
         assert_eq!(classify("CustomerHealthChanged"), EventClassification::Notification);
         assert_eq!(classify("customer_interaction_logged"), EventClassification::Notification);
         assert_eq!(classify("CustomerInteractionLogged"), EventClassification::Notification);
+    }
+
+    // --- Execution events as real concrete test cases (PROMPT-38) --------
+
+    /// `MilestoneCompleted` (informational) and `DeliveryRiskRaised`/
+    /// `TaskAssigned` (both action-implying, per `ACTION_EVENT_TYPES`'s
+    /// PROMPT-38 doc comment) — used as the real Execution events PROMPT-38
+    /// asks to be classified against, matching
+    /// `customer_events_are_classified_and_ingested_as_documented`'s shape
+    /// above.
+    #[tokio::test]
+    async fn execution_events_are_classified_and_ingested_as_documented() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+        let bus = EventBus::new(16);
+
+        let mut milestone_completed = event("mc-1", "milestone_completed");
+        milestone_completed.origin_capability = "execution".to_string();
+        let mut delivery_risk_raised = event("drr-1", "delivery_risk_raised");
+        delivery_risk_raised.origin_capability = "execution".to_string();
+        let mut task_assigned = event("ta-1", "task_assigned");
+        task_assigned.origin_capability = "execution".to_string();
+
+        let result = ingest_events(
+            vec![milestone_completed.clone(), delivery_risk_raised.clone(), task_assigned.clone()],
+            &notification_repo,
+            &action_repo,
+            &bus,
+        )
+        .await;
+
+        assert_eq!(result.inserted(), 3);
+        assert_eq!(result.rejected(), 0);
+
+        let notifications = notification_repo.rows.lock().unwrap();
+        assert_eq!(notifications.len(), 1, "MilestoneCompleted is informational");
+        assert!(notifications.contains_key(&("execution".to_string(), "mc-1".to_string())));
+
+        let actions = action_repo.rows.lock().unwrap();
+        assert_eq!(actions.len(), 2, "DeliveryRiskRaised and TaskAssigned are both ActionQueueEntry sources");
+        assert!(actions.contains_key(&("execution".to_string(), "drr-1".to_string())));
+        assert!(actions.contains_key(&("execution".to_string(), "ta-1".to_string())));
+    }
+
+    #[test]
+    fn classify_matches_delivery_risk_raised_regardless_of_casing() {
+        assert_eq!(classify("delivery_risk_raised"), EventClassification::Action);
+        assert_eq!(classify("DeliveryRiskRaised"), EventClassification::Action);
+    }
+
+    #[test]
+    fn classify_routes_milestone_completed_to_notification() {
+        assert_eq!(classify("milestone_completed"), EventClassification::Notification);
+        assert_eq!(classify("MilestoneCompleted"), EventClassification::Notification);
+    }
+
+    // --- confirmation events / ingest_confirmation (PROMPT-38) ------------
+
+    #[test]
+    fn classify_matches_task_completed_regardless_of_casing_as_confirmation() {
+        assert_eq!(classify("task_completed"), EventClassification::Confirmation);
+        assert_eq!(classify("TaskCompleted"), EventClassification::Confirmation);
+    }
+
+    /// The headline end-to-end proof for invariant 3
+    /// (`consultant-experience-context.md` §2.2): a `TaskAssigned` event
+    /// creates a `Pending` `ActionQueueEntry`; a bare consultant "start"
+    /// click (`ActionQueueRepository::mark_started`, simulating `POST
+    /// /api/action-queue/{id}/start`) moves it to `InProgress`; only then
+    /// does a `task_completed` **confirmation** event — never the consultant
+    /// directly — move it to `Completed`, and only when it carries the
+    /// original `TaskAssigned` event's `origin_event_id` as
+    /// `related_origin_event_id`.
+    #[tokio::test]
+    async fn ingest_confirmation_completes_an_in_progress_entry_created_by_task_assigned() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+        let bus = EventBus::new(16);
+        let mut subscription = bus.subscribe();
+
+        let mut task_assigned = event("ta-1", "task_assigned");
+        task_assigned.origin_capability = "execution".to_string();
+        let created = ingest_events(vec![task_assigned], &notification_repo, &action_repo, &bus).await;
+        assert_eq!(created.inserted(), 1);
+        subscription.try_recv().expect("expected a publish for the TaskAssigned action item");
+
+        let entry_id = {
+            let entries = action_repo.find_by_consultant_id("consultant-1").await.unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].action_state(), ActionState::Pending);
+            entries[0].id()
+        };
+
+        // The bare consultant click — `Pending -> InProgress`. Not part of
+        // `ingest_events`/`ingest_confirmation`, just simulating the
+        // `POST /api/action-queue/{id}/start` route's own effect for this
+        // test's purposes.
+        action_repo.mark_started(entry_id).await.unwrap();
+        assert_eq!(
+            action_repo.find_by_id(entry_id).await.unwrap().unwrap().action_state(),
+            ActionState::InProgress
+        );
+
+        let mut confirmation = confirmation_event("tc-1", "task_completed", "ta-1");
+        confirmation.origin_capability = "execution".to_string();
+
+        let result = ingest_events(vec![confirmation], &notification_repo, &action_repo, &bus).await;
+
+        assert_eq!(result.confirmed(), 1);
+        assert_eq!(result.completed_confirmations(), 1);
+        assert_eq!(result.rejected(), 0);
+
+        let completed_entry = action_repo.find_by_id(entry_id).await.unwrap().unwrap();
+        assert_eq!(completed_entry.action_state(), ActionState::Completed);
+
+        // The completion was published too — not just the original creation.
+        let published = subscription.try_recv().expect("expected a publish for the completion");
+        match published {
+            IngestedEvent::Action(entry) => assert_eq!(entry.action_state(), ActionState::Completed),
+            other => panic!("expected an Action publish, got {other:?}"),
+        }
+    }
+
+    /// A confirmation event whose `related_origin_event_id` matches no known
+    /// entry is a lenient no-op — not a rejection (e.g. ordering races, or a
+    /// confirmation for an entry this consultant's view doesn't have).
+    #[tokio::test]
+    async fn ingest_confirmation_is_a_lenient_noop_when_no_matching_entry_exists() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+        let bus = EventBus::new(16);
+
+        let confirmation = confirmation_event("tc-1", "task_completed", "does-not-exist");
+        let result = ingest_events(vec![confirmation], &notification_repo, &action_repo, &bus).await;
+
+        assert_eq!(result.confirmed(), 1);
+        assert_eq!(result.completed_confirmations(), 0);
+        assert_eq!(result.rejected(), 0);
+    }
+
+    /// A confirmation arriving for an entry the consultant never started
+    /// (still `Pending`) must not complete it — invariant 3's "`Pending ->
+    /// Completed` is never valid, even with a confirmation" guard, exercised
+    /// here through the ingestion pipeline rather than the aggregate
+    /// directly.
+    #[tokio::test]
+    async fn ingest_confirmation_does_not_complete_a_still_pending_entry() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+        let bus = EventBus::new(16);
+
+        let mut task_assigned = event("ta-1", "task_assigned");
+        task_assigned.origin_capability = "execution".to_string();
+        ingest_events(vec![task_assigned], &notification_repo, &action_repo, &bus).await;
+
+        let mut confirmation = confirmation_event("tc-1", "task_completed", "ta-1");
+        confirmation.origin_capability = "execution".to_string();
+        let result = ingest_events(vec![confirmation], &notification_repo, &action_repo, &bus).await;
+
+        assert_eq!(result.confirmed(), 1);
+        assert_eq!(result.completed_confirmations(), 0);
+
+        let entries = action_repo.find_by_consultant_id("consultant-1").await.unwrap();
+        assert_eq!(entries[0].action_state(), ActionState::Pending, "must not have been completed");
+    }
+
+    /// A confirmation event missing `related_origin_event_id` entirely is
+    /// malformed (there is nothing to confirm) — rejected, not silently
+    /// dropped.
+    #[tokio::test]
+    async fn ingest_confirmation_rejects_a_missing_related_origin_event_id() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+        let bus = EventBus::new(16);
+
+        let confirmation = event("tc-1", "task_completed");
+        assert_eq!(confirmation.related_origin_event_id, None);
+
+        let result = ingest_events(vec![confirmation], &notification_repo, &action_repo, &bus).await;
+
+        assert_eq!(result.rejected(), 1);
+        assert_eq!(result.confirmed(), 0);
+    }
+
+    /// The same confirmation redelivered twice only completes the entry
+    /// once — the second call is a no-op (already `Completed`), matching
+    /// `ActionQueueEntry::complete`'s own terminal-state guard.
+    #[tokio::test]
+    async fn ingest_confirmation_redelivered_is_idempotent() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+        let bus = EventBus::new(16);
+
+        let mut task_assigned = event("ta-1", "task_assigned");
+        task_assigned.origin_capability = "execution".to_string();
+        ingest_events(vec![task_assigned], &notification_repo, &action_repo, &bus).await;
+        let entry_id = action_repo.find_by_consultant_id("consultant-1").await.unwrap()[0].id();
+        action_repo.mark_started(entry_id).await.unwrap();
+
+        let mut confirmation = confirmation_event("tc-1", "task_completed", "ta-1");
+        confirmation.origin_capability = "execution".to_string();
+
+        let first = ingest_events(vec![confirmation.clone()], &notification_repo, &action_repo, &bus).await;
+        let second = ingest_events(vec![confirmation], &notification_repo, &action_repo, &bus).await;
+
+        assert_eq!(first.completed_confirmations(), 1);
+        assert_eq!(second.completed_confirmations(), 0, "already Completed — the second delivery is a no-op");
+        assert_eq!(second.rejected(), 0);
+
+        let entry = action_repo.find_by_id(entry_id).await.unwrap().unwrap();
+        assert_eq!(entry.action_state(), ActionState::Completed);
     }
 
     // --- construction -----------------------------------------------------

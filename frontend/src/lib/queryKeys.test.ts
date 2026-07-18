@@ -95,11 +95,17 @@ describe('queryKeys.customer', () => {
   })
 })
 
+describe('queryKeys.execution', () => {
+  it('engagements() matches PROMPT-38 GET /api/execution/engagements shape', () => {
+    expect(queryKeys.execution.engagements('consultant-1')).toEqual(['execution', 'engagements', 'consultant-1'])
+  })
+})
+
 describe('generic capability resource()', () => {
   it('builds capability-namespaced keys for capabilities with no real routes yet', () => {
-    expect(queryKeys.execution.resource('milestones', 'consultant-1')).toEqual([
-      'execution',
-      'milestones',
+    expect(queryKeys.products.resource('catalog', 'consultant-1')).toEqual([
+      'products',
+      'catalog',
       'consultant-1',
     ])
     expect(queryKeys.legal.resource('contracts', 'consultant-1')).toEqual([
@@ -109,9 +115,9 @@ describe('generic capability resource()', () => {
     ])
   })
 
-  it('every non-sales/commit/edu/capacity/customer capability exposes all + resource', () => {
+  it('every non-sales/commit/edu/capacity/customer/execution capability exposes all + resource', () => {
     const generic = CAPABILITIES.filter(
-      (c) => c !== 'sales' && c !== 'commit' && c !== 'edu' && c !== 'capacity' && c !== 'customer',
+      (c) => c !== 'sales' && c !== 'commit' && c !== 'edu' && c !== 'capacity' && c !== 'customer' && c !== 'execution',
     )
 
     for (const capability of generic) {

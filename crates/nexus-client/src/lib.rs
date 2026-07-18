@@ -20,6 +20,7 @@ pub mod circuit_breaker;
 pub mod commit;
 pub mod customer;
 pub mod edu;
+pub mod execution;
 pub mod reqwest_transport;
 pub mod retry;
 pub mod sales;
@@ -32,6 +33,7 @@ pub use circuit_breaker::{CircuitBreaker, CircuitBreakingTransport, CircuitState
 pub use commit::{CommitGateway, CommitGatewayError, NexusCommitGateway, ProposalSummary};
 pub use customer::{CustomerContextCard, CustomerGateway, CustomerGatewayError, NexusCustomerGateway};
 pub use edu::{EduGateway, EduGatewayError, LearningSnapshot, NexusEduGateway};
+pub use execution::{EngagementSnapshot, EngagementTaskSummary, ExecutionGateway, ExecutionGatewayError, NexusExecutionGateway};
 pub use reqwest_transport::ReqwestNexusTransport;
 pub use retry::{DEFAULT_MAX_RETRIES, RetryingTransport};
 pub use sales::{AccountClaimResult, NexusSalesGateway, SalesGateway, SalesGatewayError};

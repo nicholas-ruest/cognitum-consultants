@@ -1,0 +1,137 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT id, consultant_id, origin_capability, origin_event_id,\n                   title, body, deep_link, action_state, expires_at, created_at\n            FROM action_queue_entries\n            WHERE origin_capability = $1 AND origin_event_id = $2\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "action_queue_entries",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "consultant_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_queue_entries",
+            "name": "consultant_id"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "origin_capability",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_queue_entries",
+            "name": "origin_capability"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "origin_event_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_queue_entries",
+            "name": "origin_event_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "title",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_queue_entries",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "body",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_queue_entries",
+            "name": "body"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "deep_link",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_queue_entries",
+            "name": "deep_link"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "action_state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "action_queue_entries",
+            "name": "action_state"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "expires_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "action_queue_entries",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamptz",
+        "origin": {
+          "Table": {
+            "table": "action_queue_entries",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3ff633d7010999724ee6c5e15957526a301a2cb473e207f197173a4343664ff4"
+}

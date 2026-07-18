@@ -119,6 +119,29 @@ impl ActionQueueRepository for PgActionQueueRepository {
         row.map(row_to_aggregate).transpose()
     }
 
+    async fn find_by_origin_event(
+        &self,
+        origin_capability: &str,
+        origin_event_id: &str,
+    ) -> Result<Option<ActionQueueEntry>, RepoError> {
+        let row = sqlx::query_as!(
+            ActionQueueEntryRow,
+            r#"
+            SELECT id, consultant_id, origin_capability, origin_event_id,
+                   title, body, deep_link, action_state, expires_at, created_at
+            FROM action_queue_entries
+            WHERE origin_capability = $1 AND origin_event_id = $2
+            "#,
+            origin_capability,
+            origin_event_id,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|err| RepoError::OperationFailed(err.to_string()))?;
+
+        row.map(row_to_aggregate).transpose()
+    }
+
     async fn save(&self, entry: &ActionQueueEntry) -> Result<SaveOutcome, RepoError> {
         let result = sqlx::query!(
             r#"
@@ -336,6 +359,43 @@ mod tests {
 
         let missing = repo.find_by_id(Uuid::new_v4()).await.expect("find_by_id failed");
         assert_eq!(missing, None);
+    }
+
+    /// `find_by_origin_event` (PROMPT-38): resolves the entry a
+    /// `(origin_capability, origin_event_id)` pair created — the lookup a
+    /// later confirmation event uses (see `bff_core::event_ingestion`'s
+    /// `ingest_confirmation`) since it has no entry `id` to call
+    /// `find_by_id` with, only a reference to the origin event.
+    #[tokio::test]
+    async fn find_by_origin_event_finds_a_saved_entry_and_returns_none_when_unmatched() {
+        let (pool, _container) = migrated_pool().await;
+        let repo = PgActionQueueRepository::new(pool);
+
+        let now: DateTime<Utc> = "2026-01-01T00:00:00Z".parse().unwrap();
+        let entry = ActionQueueEntry::new(
+            "consultant-1",
+            "execution",
+            "ta-1",
+            "Task Assigned",
+            "You have been assigned a new delivery task.",
+            None,
+            now + Duration::hours(24),
+            now,
+        )
+        .expect("valid action queue entry");
+        repo.save(&entry).await.expect("save failed");
+
+        let found =
+            repo.find_by_origin_event("execution", "ta-1").await.expect("find_by_origin_event failed");
+        assert_eq!(found, Some(entry));
+
+        let wrong_capability =
+            repo.find_by_origin_event("sales", "ta-1").await.expect("find_by_origin_event failed");
+        assert_eq!(wrong_capability, None);
+
+        let wrong_event_id =
+            repo.find_by_origin_event("execution", "does-not-exist").await.expect("find_by_origin_event failed");
+        assert_eq!(wrong_event_id, None);
     }
 
     #[tokio::test]

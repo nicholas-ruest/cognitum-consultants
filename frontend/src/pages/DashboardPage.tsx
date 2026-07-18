@@ -7,6 +7,7 @@ import { ProfileEditForm } from '../features/capacity/ProfileEditForm'
 import { ProposalWorkspace } from '../features/commit/ProposalWorkspace'
 import { CustomerContextList } from '../features/customer/CustomerContextList'
 import { LearningDashboard } from '../features/edu/LearningDashboard'
+import { ExecutionWorkspace } from '../features/execution/ExecutionWorkspace'
 import { ActionQueue } from '../features/notifications/ActionQueue'
 import { NotificationCentre } from '../features/notifications/NotificationCentre'
 import { LeadConflictCheck } from '../features/sales/LeadConflictCheck'
@@ -32,10 +33,11 @@ export interface DashboardPageProps {
  * (PROMPT-34) hosts the real `ProposalWorkspace` feature module, the
  * `"edu"` card (PROMPT-35) hosts the real `LearningDashboard` feature
  * module, the `"capacity"` card (PROMPT-36) hosts the real
- * `ProfileEditForm` feature module, and the `"customer"` card (PROMPT-37)
- * hosts the real `CustomerContextList` feature module; every other
- * `module_id` still renders a placeholder — their feature modules don't
- * exist yet (PROMPT-38+). Keeps the PROMPT-18 "You are logged in as ..." line too
+ * `ProfileEditForm` feature module, the `"customer"` card (PROMPT-37)
+ * hosts the real `CustomerContextList` feature module, and the
+ * `"execution"` card (PROMPT-38) hosts the real `ExecutionWorkspace`
+ * feature module; every other `module_id` still renders a placeholder —
+ * their feature modules don't exist yet (PROMPT-39+). Keeps the PROMPT-18 "You are logged in as ..." line too
  * (this unit's "replace or keep both" choice: keep both) since it's cheap,
  * still true, and no acceptance criterion asks for its removal.
  *
@@ -97,6 +99,8 @@ export function DashboardPage({ session }: DashboardPageProps) {
                     <ProfileEditForm />
                   ) : card.module_id === 'customer' ? (
                     <CustomerContextList />
+                  ) : card.module_id === 'execution' ? (
+                    <ExecutionWorkspace />
                   ) : (
                     <p className="text-xs text-gray-500">no live data yet</p>
                   )}
