@@ -56,6 +56,23 @@ pub const DEFAULT_WRITE_TIMEOUT: Duration = Duration::from_secs(3);
 /// the module docs' "A third tier" section.
 pub const DEFAULT_EXTENDED_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// A fourth, even longer tier: the single most cacheable, least
+/// latency-sensitive read in this repo (PROMPT-39, Products'
+/// `RequestProductCatalogQuery`). Unlike [`DEFAULT_EXTENDED_READ_TIMEOUT`]
+/// (Edu's own "third tier" — a read-mostly capability with no UI-blocking
+/// call sharing its gateway), this unit's own prompt text and
+/// `../ddd/anti-corruption-layers.md` §7 single Products out as the one
+/// capability that should get **the** longest timeout of all ten ACLs, not
+/// merely another entry tied with Edu's tier: no synchronous UI-blocking
+/// call ever shares this gateway, the catalog is not even
+/// per-consultant-scoped (see `crate::products` module docs), and the
+/// underlying `ProductReferenceCard` data changes rarely enough
+/// (`anti-corruption-layers.md` §7) that a slow-but-eventually-successful
+/// catalog fetch is preferable to giving up early. Same "generous but
+/// bounded" placeholder reasoning as every other constant in this module —
+/// not yet tuned against real ADR-012 latency data.
+pub const DEFAULT_MAX_READ_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Wraps an inner [`NexusTransport`] and enforces a fixed timeout on every
 /// `send` call, per ADR-016's per-gateway timeout budget requirement.
 ///

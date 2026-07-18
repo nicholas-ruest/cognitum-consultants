@@ -156,6 +156,19 @@ pub struct AppState {
     /// even though both implement the same [`nexus_client::ExecutionGateway`]
     /// trait — see `crate::execution` module docs.
     pub execution_command_gateway: Arc<dyn nexus_client::ExecutionGateway>,
+    /// Products ACL gateway (ADR-016, PROMPT-39) used for
+    /// `ProductsGateway::request_product_catalog`. Unlike
+    /// [`Self::sales_query_gateway`]/[`Self::commit_query_gateway`]/
+    /// [`Self::capacity_query_gateway`]/[`Self::execution_query_gateway`],
+    /// there is no matching `products_command_gateway` — Products has no
+    /// side-effecting outbound command (`anti-corruption-layers.md` §7), so
+    /// a single `Arc<dyn ...>` instance, retry-wrapped over the ADR-016
+    /// longest-read-timeout + most-aggressive-retry budget (this repo's
+    /// most cacheable, least latency-sensitive gateway), safely serves the
+    /// whole trait — the same shape as [`Self::edu_gateway`]/
+    /// [`Self::customer_gateway`]. See
+    /// `crate::products`/`nexus_client::products` module docs.
+    pub products_gateway: Arc<dyn nexus_client::ProductsGateway>,
     /// Repository for [`bff_core::CrossCapabilityWorkflowSession`]
     /// (PROMPT-22/34, ADR-010). PROMPT-22 only built the aggregate +
     /// repository; PROMPT-34 is the first real BFF consumer

@@ -212,6 +212,25 @@ pub enum EventClassification {
 ///   entire repo is [`ingest_confirmation`] below, reached exclusively via a
 ///   `task_completed` confirmation event ingested through this same
 ///   classify-and-route pipeline — see [`CONFIRMATION_EVENT_TYPES`].
+/// # PROMPT-39 (Products ACL) additions: none
+/// Products' one inbound event (`anti-corruption-layers.md` §7:
+/// `ProductCatalogUpdated`) was judged against the same "does this imply
+/// the consultant must now go *do* something, beyond just being told" test
+/// the other capabilities' events were:
+/// - `ProductCatalogUpdated` -> **notification**. This unit's own prompt
+///   text is explicit: Products' catalog-change events are "low priority,
+///   unlikely to warrant an `ActionQueueEntry`, just refresh the cache/send
+///   a low-severity notification" — a changed catalog entry is informational
+///   by nature (a consultant may want to know a product's pricing guidance
+///   changed), not a prompt to go take some specific action the way
+///   `task_assigned` names one. Not added to this list; classifies as
+///   [`EventClassification::Notification`] via the existing default. See
+///   `crate::event_ingestion`'s general "refresh the cache" framing for
+///   `ProductCatalogUpdated` — no separate cache-invalidation mechanism is
+///   added here: the frontend's own TanStack Query cache is what gets
+///   refreshed (via the same SSE-pushed-notification -> `invalidateQueries`
+///   path ADR-015 already wires up for every other notification), not
+///   anything this crate's ingestion pipeline itself needs to special-case.
 const ACTION_EVENT_TYPES: &[&str] = &[
     "task_assigned",
     "collaboration_request_acknowledged",
@@ -1263,6 +1282,40 @@ mod tests {
     fn classify_routes_milestone_completed_to_notification() {
         assert_eq!(classify("milestone_completed"), EventClassification::Notification);
         assert_eq!(classify("MilestoneCompleted"), EventClassification::Notification);
+    }
+
+    // --- Products events as real concrete test cases (PROMPT-39) ---------
+
+    /// `ProductCatalogUpdated` — informational per `ACTION_EVENT_TYPES`'s
+    /// PROMPT-39 doc comment — used as the real Products event PROMPT-39
+    /// asks to be classified against, matching
+    /// `customer_events_are_classified_and_ingested_as_documented`'s shape
+    /// above.
+    #[tokio::test]
+    async fn products_events_are_classified_and_ingested_as_documented() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+        let bus = EventBus::new(16);
+
+        let mut product_catalog_updated = event("pcu-1", "product_catalog_updated");
+        product_catalog_updated.origin_capability = "products".to_string();
+
+        let result = ingest_events(vec![product_catalog_updated.clone()], &notification_repo, &action_repo, &bus).await;
+
+        assert_eq!(result.inserted(), 1);
+        assert_eq!(result.rejected(), 0);
+
+        let notifications = notification_repo.rows.lock().unwrap();
+        assert_eq!(notifications.len(), 1, "ProductCatalogUpdated is informational, low-priority");
+        assert!(notifications.contains_key(&("products".to_string(), "pcu-1".to_string())));
+
+        assert_eq!(action_repo.rows.lock().unwrap().len(), 0, "ProductCatalogUpdated never implies a required action");
+    }
+
+    #[test]
+    fn classify_routes_product_catalog_updated_to_notification() {
+        assert_eq!(classify("product_catalog_updated"), EventClassification::Notification);
+        assert_eq!(classify("ProductCatalogUpdated"), EventClassification::Notification);
     }
 
     // --- confirmation events / ingest_confirmation (PROMPT-38) ------------

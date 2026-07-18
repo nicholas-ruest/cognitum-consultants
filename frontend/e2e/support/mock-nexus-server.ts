@@ -19,7 +19,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  *
  * # Fixtures are fixed, not dynamically configurable
  * This server always grants the `"sales"`, `"commit"`, `"edu"`, `"capacity"`,
- * `"customer"`, and `"execution"` capabilities (for whichever
+ * `"customer"`, `"execution"`, and `"products"` capabilities (for whichever
  * `consultant_id` is asked about) and always answers a company-claim check
  * for most company names with the `active_owned_account` fixture —
  * `.plans/ddd/anti-corruption-layers.md` §1's worked example, and the same
@@ -40,6 +40,9 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * below, same pattern; `POST /execution/v1/task-completions` records every
  * request it receives (mirroring `proposalActions`/`referrals` below) so a
  * spec can assert the BFF forwarded the expected `task_id`/`consultant_id`.
+ * Products' `GET /products/v1/catalog` (PROMPT-39) always answers with the
+ * fixed `PRODUCT_CATALOG_FIXTURE` below, same "fixed, not dynamically
+ * configurable" pattern as Edu/Customer/Execution.
  *
  * # One exception: the `no_match` fixture, by company name (PROMPT-34)
  * `commit-sales-deeplink.spec.ts` needs a `creation_allowed: true` result to
@@ -219,6 +222,38 @@ const CUSTOMER_CONTEXT_FIXTURE: CustomerContextCard[] = [
   },
 ]
 
+/** `ProductReferenceCard` shape, mirrored from `crates/nexus-client/src/products.rs` (PROMPT-39). */
+export interface ProductReferenceCard {
+  product_id: string
+  name: string
+  packaging_summary: string
+  pricing_guidance: string
+  demo_assets: string[]
+}
+
+/**
+ * Fixed `GET /products/v1/catalog` fixture (PROMPT-39): one product with a
+ * demo asset and one without, proving the frontend's list-plus-detail
+ * rendering against both shapes — mirroring `ENGAGEMENT_SNAPSHOT_FIXTURE`'s
+ * "fixed, not dynamically configurable" rationale above.
+ */
+const PRODUCT_CATALOG_FIXTURE: ProductReferenceCard[] = [
+  {
+    product_id: 'product-1',
+    name: 'Cloud Migration Accelerator',
+    packaging_summary: '4-week fixed-scope engagement',
+    pricing_guidance: 'Starting at $50,000',
+    demo_assets: ['https://products.cognitum.one/demos/product-1.mp4'],
+  },
+  {
+    product_id: 'product-2',
+    name: 'Security Posture Review',
+    packaging_summary: '2-week assessment',
+    pricing_guidance: 'Starting at $20,000',
+    demo_assets: [],
+  },
+]
+
 /** `EngagementTaskSummary` shape, mirrored from `crates/nexus-client/src/execution.rs` (PROMPT-38). */
 export interface EngagementTaskSummary {
   task_id: string
@@ -325,6 +360,11 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
   // PROMPT-38: `POST /execution/v1/task-completions` requests, recorded so a
   // spec can confirm the BFF forwarded the expected `task_id`/`consultant_id`.
   const taskCompletionRequests: RecordedCommand[] = []
+  // PROMPT-39: `GET /products/v1/catalog` requests, recorded so a spec can
+  // confirm the BFF actually called through to Products (there is no
+  // `consultant_id` to assert on this one — see `products.rs`'s module docs
+  // for why — so this just counts/records hits).
+  const productCatalogRequests: RecordedCommand[] = []
   // PROMPT-33 e2e: events queued via `POST /_test/enqueue-event` and
   // drained (returned once, then cleared) on the next `GET
   // events/v1/poll` — see `notifications-sse.spec.ts`. Draining, not
@@ -361,6 +401,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
           { consultant_id: consultantId, capability: 'capacity', scope: 'default', expires_at: expiresAt },
           { consultant_id: consultantId, capability: 'customer', scope: 'default', expires_at: expiresAt },
           { consultant_id: consultantId, capability: 'execution', scope: 'default', expires_at: expiresAt },
+          { consultant_id: consultantId, capability: 'products', scope: 'default', expires_at: expiresAt },
         ],
       })
       return
@@ -504,6 +545,16 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    // Products catalog query (ADR-016, PROMPT-39): always answers with the
+    // fixed `PRODUCT_CATALOG_FIXTURE`, matching
+    // `crates/nexus-client/src/products.rs`'s `ProductCatalogEnvelope`
+    // (`{"cards": [...]}`) convention.
+    if (method === 'GET' && url.pathname === '/products/v1/catalog') {
+      productCatalogRequests.push({ path: url.pathname, body: null, receivedAt: new Date().toISOString() })
+      sendJson(response, 200, { cards: PRODUCT_CATALOG_FIXTURE })
+      return
+    }
+
     // Events poll (PROMPT-30/PROMPT-33): `bff-api`'s ingestion polling loop
     // (`crates/bff-api/src/event_ingestion.rs`) expects a bare JSON array
     // of `CapabilityEventReceived`. Drains whatever `_test/enqueue-event`
@@ -558,6 +609,11 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    if (method === 'GET' && url.pathname === '/_test/product-catalog-requests') {
+      sendJson(response, 200, productCatalogRequests)
+      return
+    }
+
     // Test-injection route (PROMPT-33): queues one `CapabilityEventReceived`
     // for the *next* `GET events/v1/poll` to pick up — how
     // `notifications-sse.spec.ts` drives a real Nexus->ingestion->NOTIFY/
@@ -580,6 +636,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       capacityProfileUpdates.length = 0
       customerContextRequests.length = 0
       taskCompletionRequests.length = 0
+      productCatalogRequests.length = 0
       sendJson(response, 200, {})
       return
     }

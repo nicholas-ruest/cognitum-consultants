@@ -29,6 +29,16 @@ use crate::transport::{NexusRequest, NexusResponse, NexusTransport, NexusTranspo
 /// Default bounded retry count (ADR-016: "e.g. 3 retries").
 pub const DEFAULT_MAX_RETRIES: u32 = 3;
 
+/// A more aggressive bounded retry count than [`DEFAULT_MAX_RETRIES`], for
+/// the one capability this repo's own prompt text calls out as needing "the
+/// most aggressive retry budget" (PROMPT-39, Products' read-only,
+/// most-cacheable `RequestProductCatalogQuery` — see
+/// `crate::timeout::DEFAULT_MAX_READ_TIMEOUT`'s doc comment for the paired
+/// timeout-budget reasoning). Still bounded — "aggressive" is relative to
+/// this repo's other gateways, not unlimited — and, per this module's own
+/// contract above, only ever safe to apply to an idempotent read.
+pub const AGGRESSIVE_MAX_RETRIES: u32 = 5;
+
 const INITIAL_BACKOFF: Duration = Duration::from_millis(100);
 const MAX_BACKOFF: Duration = Duration::from_secs(2);
 

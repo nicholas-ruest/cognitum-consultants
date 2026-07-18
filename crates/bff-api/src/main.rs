@@ -12,6 +12,7 @@ mod metrics;
 mod notifications;
 mod notifications_sse;
 mod permissions;
+mod products;
 mod sales;
 mod session;
 mod telemetry;
@@ -217,6 +218,30 @@ async fn main() {
     let execution_command_gateway: Arc<dyn nexus_client::ExecutionGateway> =
         Arc::new(nexus_client::NexusExecutionGateway::new(execution_command_transport));
 
+    // Products ACL gateway (ADR-016, PROMPT-39): a single instance, unlike
+    // Sales/Commit/Capacity/Execution's two-instance split — Products has no
+    // side-effecting outbound command to isolate a retry-safe read from (see
+    // `products`/`nexus_client::products` module docs), the same shape as
+    // Edu/Customer above. Unlike every other gateway constructed so far,
+    // `request_product_catalog` gets this repo's **longest** timeout
+    // (`DEFAULT_MAX_READ_TIMEOUT`) and **most aggressive** retry budget
+    // (`AGGRESSIVE_MAX_RETRIES`, not `with_default_retries`) — per this
+    // unit's own acceptance criteria and `nexus_client::products`'s module
+    // docs, Products is this repo's single most cacheable, least
+    // latency-sensitive read.
+    let products_base_transport = nexus_client::ReqwestNexusTransport::new(&cfg.nexus_endpoint_url)
+        .unwrap_or_else(|err| panic!("invalid nexus_endpoint_url {:?}: {err}", cfg.nexus_endpoint_url));
+    let products_timeout_transport = nexus_client::TimeoutTransport::new(
+        Arc::new(products_base_transport),
+        nexus_client::DEFAULT_MAX_READ_TIMEOUT,
+    );
+    let products_transport: Arc<dyn nexus_client::NexusTransport> = Arc::new(nexus_client::RetryingTransport::new(
+        Arc::new(products_timeout_transport),
+        nexus_client::AGGRESSIVE_MAX_RETRIES,
+    ));
+    let products_gateway: Arc<dyn nexus_client::ProductsGateway> =
+        Arc::new(nexus_client::NexusProductsGateway::new(products_transport));
+
     // PROMPT-22/34, ADR-010: the Postgres-backed `CrossCapabilityWorkflowSession`
     // repository — PROMPT-22 built this, but no BFF route consumed it until
     // this unit (`workflow_sessions::workflow_sessions_router`,
@@ -313,6 +338,7 @@ async fn main() {
         customer_gateway,
         execution_query_gateway,
         execution_command_gateway,
+        products_gateway,
         workflow_session_repository,
         notification_repository,
         action_queue_repository,
@@ -347,7 +373,10 @@ async fn main() {
     // adds `GET /api/execution/engagements` and
     // `POST /api/execution/tasks/{id}/complete` (PROMPT-38) — see that
     // module's docs for why the latter never touches `ActionQueueEntry`
-    // state directly.
+    // state directly. `products::products_router` adds
+    // `GET /api/products/catalog` (PROMPT-39) — see that module's docs for
+    // why aggressive caching of this response lives client-side (TanStack
+    // Query), not as an HTTP `Cache-Control` header here.
     let api_router = Router::new()
         .route("/login/dev", post(session::login_dev))
         .merge(session::protected_router(state.clone()))
@@ -359,6 +388,7 @@ async fn main() {
         .merge(capacity::capacity_router(state.clone()))
         .merge(customer::customer_router(state.clone()))
         .merge(execution::execution_router(state.clone()))
+        .merge(products::products_router(state.clone()))
         .merge(workflow_sessions::workflow_sessions_router(state.clone()))
         .merge(notifications_sse::notifications_router(state.clone()))
         .merge(notifications::notifications_write_router(state.clone()));

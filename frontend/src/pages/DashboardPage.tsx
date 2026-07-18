@@ -10,6 +10,7 @@ import { LearningDashboard } from '../features/edu/LearningDashboard'
 import { ExecutionWorkspace } from '../features/execution/ExecutionWorkspace'
 import { ActionQueue } from '../features/notifications/ActionQueue'
 import { NotificationCentre } from '../features/notifications/NotificationCentre'
+import { ProductCatalog } from '../features/products/ProductCatalog'
 import { LeadConflictCheck } from '../features/sales/LeadConflictCheck'
 import type { SessionState } from '../lib/SessionContext'
 import { useDashboardQuery } from '../lib/useDashboardQuery'
@@ -34,10 +35,12 @@ export interface DashboardPageProps {
  * `"edu"` card (PROMPT-35) hosts the real `LearningDashboard` feature
  * module, the `"capacity"` card (PROMPT-36) hosts the real
  * `ProfileEditForm` feature module, the `"customer"` card (PROMPT-37)
- * hosts the real `CustomerContextList` feature module, and the
+ * hosts the real `CustomerContextList` feature module, the
  * `"execution"` card (PROMPT-38) hosts the real `ExecutionWorkspace`
- * feature module; every other `module_id` still renders a placeholder —
- * their feature modules don't exist yet (PROMPT-39+). Keeps the PROMPT-18 "You are logged in as ..." line too
+ * feature module, and the `"products"` card (PROMPT-39) hosts the real
+ * `ProductCatalog` feature module; every other `module_id` still renders a
+ * placeholder — their feature modules don't exist yet (PROMPT-40+). Keeps
+ * the PROMPT-18 "You are logged in as ..." line too
  * (this unit's "replace or keep both" choice: keep both) since it's cheap,
  * still true, and no acceptance criterion asks for its removal.
  *
@@ -101,6 +104,8 @@ export function DashboardPage({ session }: DashboardPageProps) {
                     <CustomerContextList />
                   ) : card.module_id === 'execution' ? (
                     <ExecutionWorkspace />
+                  ) : card.module_id === 'products' ? (
+                    <ProductCatalog />
                   ) : (
                     <p className="text-xs text-gray-500">no live data yet</p>
                   )}

@@ -394,6 +394,18 @@ mod tests {
         }
     }
 
+    struct UnusedProductsGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::ProductsGateway for UnusedProductsGateway {
+        async fn request_product_catalog(
+            &self,
+            _filters: Option<&[String]>,
+        ) -> Result<Vec<nexus_client::ProductReferenceCard>, nexus_client::ProductsGatewayError> {
+            unimplemented!("commit tests never call the products gateway")
+        }
+    }
+
     enum Outcome<T> {
         Ok(T),
         Err,
@@ -537,6 +549,7 @@ mod tests {
             customer_gateway: Arc::new(UnusedCustomerGateway),
             execution_query_gateway: Arc::new(UnusedExecutionGateway),
             execution_command_gateway: Arc::new(UnusedExecutionGateway),
+            products_gateway: Arc::new(UnusedProductsGateway),
             workflow_session_repository,
             notification_repository,
             action_queue_repository,

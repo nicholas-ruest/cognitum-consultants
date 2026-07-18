@@ -18,17 +18,17 @@
  * `../ddd/anti-corruption-layers.md` §1/§2/§3/§4/§5/§6 and the literal
  * examples in PROMPT-16/ADR-015.
  *
- * The other three capabilities (`products`, `landscape`, `legal`) have no
- * routes and no settled resource shape yet (PROMPT-39+) — inventing named
- * keys for them now would fabricate business meaning that doesn't exist.
- * Instead each exposes `all` (for capability-wide invalidation) and a
- * generic `resource()` builder that follows the same
+ * The remaining two capabilities (`landscape`, `legal`) have no routes and
+ * no settled resource shape yet (PROMPT-40+) — inventing named keys for them
+ * now would fabricate business meaning that doesn't exist. Each still
+ * exposes `all` (for capability-wide invalidation) and a generic
+ * `resource()` builder that follows the same
  * [capability, resource, consultantId, ...rest] shape. Once a capability's
  * real routes land, replace its `resource()` calls with named, typed
  * methods the same way `sales.conflicts`, `commit.proposals`, `edu.catalog`,
- * `capacity.profile`, `customer.assigned`, and `execution.engagements` are
- * done, and keep `resource()` around only if it's still useful for ad hoc/
- * rare lookups.
+ * `capacity.profile`, `customer.assigned`, `execution.engagements`, and
+ * `products.catalog` (PROMPT-39) are done, and keep `resource()` around only
+ * if it's still useful for ad hoc/rare lookups.
  */
 
 export const CAPABILITIES = [
@@ -104,7 +104,8 @@ export const queryKeys = {
   },
   products: {
     all: capabilityRoot('products'),
-    resource: genericResource('products'),
+    /** `GET /api/products/catalog` (PROMPT-39) query key. */
+    catalog: (consultantId: string) => capabilityKey('products', 'catalog', consultantId),
   },
   landscape: {
     all: capabilityRoot('landscape'),

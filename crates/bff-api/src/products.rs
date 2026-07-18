@@ -1,20 +1,40 @@
-//! `GET /api/edu/catalog` (PROMPT-35, ADR-009 permission gate, ADR-016
-//! resilience stack, `../../.plans/ddd/anti-corruption-layers.md` §3).
+//! `GET /api/products/catalog` (PROMPT-39, ADR-009 permission gate, ADR-016
+//! resilience stack, `../../.plans/ddd/anti-corruption-layers.md` §7).
 //!
-//! One session-gated route over [`nexus_client::EduGateway`], following
-//! [`crate::commit`]'s exact handler pattern (see that module's docs — this
-//! one does not repeat the full rationale, only what differs):
+//! One session-gated route over [`nexus_client::ProductsGateway`], following
+//! [`crate::edu`]'s exact handler pattern (see that module's docs — this one
+//! does not repeat the full rationale, only what differs):
 //! permission-short-circuit before any gateway call, verbatim relay of the
-//! gateway's own `Vec<`[`nexus_client::LearningSnapshot`]`>` on success,
+//! gateway's own `Vec<`[`nexus_client::ProductReferenceCard`]`>` on success,
 //! `502` on gateway failure.
 //!
-//! # No two-gateway split
-//! Unlike Sales/Commit, Edu has exactly one outbound call
-//! ([`nexus_client::EduGateway::request_learning_catalog`]) and no
-//! side-effecting command — see `nexus_client::edu`'s module docs for why
-//! [`session::AppState`] therefore carries a single
-//! [`session::AppState::edu_gateway`] field rather than a
-//! query/command pair.
+//! # No two-gateway split, and no `consultant_id` passed to the gateway
+//! Unlike Sales/Commit/Capacity/Execution, Products has exactly one outbound
+//! call ([`nexus_client::ProductsGateway::request_product_catalog`]) and no
+//! side-effecting command — see `nexus_client::products`'s module docs for
+//! why [`session::AppState`] therefore carries a single
+//! [`session::AppState::products_gateway`] field rather than a
+//! query/command pair. Unlike [`crate::edu::get_catalog`]/
+//! [`crate::customer::list_assigned_customers`], this handler never passes
+//! `session.consultant_id` into the gateway call — the approved product
+//! catalog is not permission-scoped per-consultant
+//! (`anti-corruption-layers.md` §7's `RequestProductCatalogQuery` takes only
+//! an optional `filters`), so there is nothing consultant-specific to thread
+//! through. The session is still required and the `products` capability
+//! permission is still checked (ADR-009 layer 1) — only the gateway call
+//! itself needs no consultant argument.
+//!
+//! # Aggressive caching is a client-side (TanStack Query) concern, not an
+//! HTTP `Cache-Control` header here
+//! This unit's acceptance criteria call for "aggressive client-side caching"
+//! of this response, since `ProductReferenceCard` data changes rarely
+//! (`anti-corruption-layers.md` §7). Per ADR-015, TanStack Query — not
+//! browser HTTP caching — is this repo's chosen server-state caching layer,
+//! and ADR-015 explicitly names `ProductReferenceCard` as the motivating
+//! example for tuning a query's `staleTime`/`gcTime` more generously than
+//! the default. This handler therefore sets no `Cache-Control` header (no
+//! other route in this repo does either); the aggressive caching lives in
+//! `frontend/src/features/products/ProductCatalog.tsx`'s `useQuery` options.
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -27,47 +47,47 @@ use crate::session::{self, AppState};
 use auth::Session;
 
 /// Capability name gating the route below (PROMPT-15/ADR-009).
-const EDU_CAPABILITY: &str = "edu";
+const PRODUCTS_CAPABILITY: &str = "products";
 
 fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
 fn forbidden() -> Response {
-    error_response(StatusCode::FORBIDDEN, "not permitted for the edu capability")
+    error_response(StatusCode::FORBIDDEN, "not permitted for the products capability")
 }
 
-/// `502`: the gateway call to Edu (via Nexus) failed — never coerced into a
-/// synthetic success, same convention as `crate::sales::sales_unavailable`/
-/// `crate::commit::commit_unavailable`.
-fn edu_unavailable() -> Response {
-    error_response(StatusCode::BAD_GATEWAY, "edu service unavailable")
+/// `502`: the gateway call to Products (via Nexus) failed — never coerced
+/// into a synthetic success, same convention as
+/// `crate::sales::sales_unavailable`/`crate::edu`'s `edu_unavailable`.
+fn products_unavailable() -> Response {
+    error_response(StatusCode::BAD_GATEWAY, "products service unavailable")
 }
 
-/// `GET /api/edu/catalog`: checks permission, then calls
-/// [`nexus_client::EduGateway::request_learning_catalog`] via
-/// [`AppState::edu_gateway`] and relays the resulting
-/// `Vec<`[`nexus_client::LearningSnapshot`]`>` **verbatim**.
+/// `GET /api/products/catalog`: checks permission, then calls
+/// [`nexus_client::ProductsGateway::request_product_catalog`] via
+/// [`AppState::products_gateway`] and relays the resulting
+/// `Vec<`[`nexus_client::ProductReferenceCard`]`>` **verbatim**.
 pub async fn get_catalog(State(state): State<AppState>, Extension(session): Extension<Session>) -> Response {
-    if !state.permission_cache.is_permitted(&session.consultant_id, EDU_CAPABILITY).await {
+    if !state.permission_cache.is_permitted(&session.consultant_id, PRODUCTS_CAPABILITY).await {
         return forbidden();
     }
 
-    match state.edu_gateway.request_learning_catalog(&session.consultant_id, None).await {
-        Ok(snapshots) => Json(snapshots).into_response(),
+    match state.products_gateway.request_product_catalog(None).await {
+        Ok(cards) => Json(cards).into_response(),
         Err(err) => {
-            tracing::error!(error = %err, consultant_id = %session.consultant_id, "edu learning catalog fetch failed");
-            edu_unavailable()
+            tracing::error!(error = %err, consultant_id = %session.consultant_id, "products catalog fetch failed");
+            products_unavailable()
         }
     }
 }
 
-/// Builds the `/api/edu/*` sub-router, with the same
+/// Builds the `/api/products/*` sub-router, with the same
 /// [`session::require_session`] middleware [`session::protected_router`]
 /// applies to every other protected route in this repo.
-pub fn edu_router(state: AppState) -> Router<AppState> {
+pub fn products_router(state: AppState) -> Router<AppState> {
     Router::new()
-        .route("/edu/catalog", get(get_catalog))
+        .route("/products/catalog", get(get_catalog))
         .layer(axum::middleware::from_fn_with_state(state, session::require_session))
 }
 
@@ -83,7 +103,7 @@ mod tests {
     use axum_extra::extract::cookie::Cookie;
     use bff_core::DashboardConfigurationRepository;
     use chrono::{Duration as ChronoDuration, Utc};
-    use nexus_client::{ArmorGateway, ArmorGatewayError, EduGateway, EduGatewayError, LearningSnapshot, NexusTransportError, PermissionAssertion};
+    use nexus_client::{ArmorGateway, ArmorGatewayError, NexusTransportError, PermissionAssertion, ProductReferenceCard, ProductsGateway, ProductsGatewayError};
     use persistence::PgDashboardConfigurationRepository;
     use serde_json::{json, Value};
     use testcontainers_modules::postgres::Postgres;
@@ -126,7 +146,7 @@ mod tests {
             _company_name: &str,
             _consultant_id: &str,
         ) -> Result<nexus_client::AccountClaimResult, nexus_client::SalesGatewayError> {
-            unimplemented!("edu tests never call the sales gateway")
+            unimplemented!("products tests never call the sales gateway")
         }
 
         async fn request_collaboration(
@@ -135,7 +155,7 @@ mod tests {
             _consultant_id: &str,
             _message: Option<&str>,
         ) -> Result<(), nexus_client::SalesGatewayError> {
-            unimplemented!("edu tests never call the sales gateway")
+            unimplemented!("products tests never call the sales gateway")
         }
 
         async fn submit_referral(
@@ -144,7 +164,7 @@ mod tests {
             _consultant_id: &str,
             _notes: Option<&str>,
         ) -> Result<(), nexus_client::SalesGatewayError> {
-            unimplemented!("edu tests never call the sales gateway")
+            unimplemented!("products tests never call the sales gateway")
         }
     }
 
@@ -157,14 +177,14 @@ mod tests {
             _origin_reference: &str,
             _consultant_id: &str,
         ) -> Result<nexus_client::ProposalSummary, nexus_client::CommitGatewayError> {
-            unimplemented!("edu tests never call the commit gateway")
+            unimplemented!("products tests never call the commit gateway")
         }
 
         async fn list_proposals(
             &self,
             _consultant_id: &str,
         ) -> Result<Vec<nexus_client::ProposalSummary>, nexus_client::CommitGatewayError> {
-            unimplemented!("edu tests never call the commit gateway")
+            unimplemented!("products tests never call the commit gateway")
         }
 
         async fn request_proposal_action(
@@ -172,7 +192,20 @@ mod tests {
             _proposal_id: &str,
             _action: &str,
         ) -> Result<(), nexus_client::CommitGatewayError> {
-            unimplemented!("edu tests never call the commit gateway")
+            unimplemented!("products tests never call the commit gateway")
+        }
+    }
+
+    struct UnusedEduGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::EduGateway for UnusedEduGateway {
+        async fn request_learning_catalog(
+            &self,
+            _consultant_id: &str,
+            _filters: Option<&[String]>,
+        ) -> Result<Vec<nexus_client::LearningSnapshot>, nexus_client::EduGatewayError> {
+            unimplemented!("products tests never call the edu gateway")
         }
     }
 
@@ -185,14 +218,14 @@ mod tests {
             _consultant_id: &str,
             _profile_fields: nexus_client::ConsultantProfileIntake,
         ) -> Result<nexus_client::ProfileUpdateResult, nexus_client::CapacityGatewayError> {
-            unimplemented!("edu tests never call the capacity gateway")
+            unimplemented!("products tests never call the capacity gateway")
         }
 
         async fn get_own_profile(
             &self,
             _consultant_id: &str,
         ) -> Result<nexus_client::ConsultantProfileIntake, nexus_client::CapacityGatewayError> {
-            unimplemented!("edu tests never call the capacity gateway")
+            unimplemented!("products tests never call the capacity gateway")
         }
     }
 
@@ -205,7 +238,7 @@ mod tests {
             _consultant_id: &str,
             _customer_id: Option<&str>,
         ) -> Result<Vec<nexus_client::CustomerContextCard>, nexus_client::CustomerGatewayError> {
-            unimplemented!("edu tests never call the customer gateway")
+            unimplemented!("products tests never call the customer gateway")
         }
     }
 
@@ -217,7 +250,7 @@ mod tests {
             &self,
             _consultant_id: &str,
         ) -> Result<Vec<nexus_client::EngagementSnapshot>, nexus_client::ExecutionGatewayError> {
-            unimplemented!("edu tests never call the execution gateway")
+            unimplemented!("products tests never call the execution gateway")
         }
 
         async fn confirm_task_completion(
@@ -225,19 +258,7 @@ mod tests {
             _task_id: &str,
             _consultant_id: &str,
         ) -> Result<(), nexus_client::ExecutionGatewayError> {
-            unimplemented!("edu tests never call the execution gateway")
-        }
-    }
-
-    struct UnusedProductsGateway;
-
-    #[async_trait::async_trait]
-    impl nexus_client::ProductsGateway for UnusedProductsGateway {
-        async fn request_product_catalog(
-            &self,
-            _filters: Option<&[String]>,
-        ) -> Result<Vec<nexus_client::ProductReferenceCard>, nexus_client::ProductsGatewayError> {
-            unimplemented!("edu tests never call the products gateway")
+            unimplemented!("products tests never call the execution gateway")
         }
     }
 
@@ -246,31 +267,30 @@ mod tests {
         Err,
     }
 
-    /// Test-double `EduGateway`. Increments the shared `call_count`
+    /// Test-double `ProductsGateway`. Increments the shared `call_count`
     /// unconditionally so tests can assert the gateway was — or, per the
     /// permission-short-circuit test, was **never** — invoked.
-    struct MockEduGateway {
-        catalog_outcome: Outcome<Vec<LearningSnapshot>>,
+    struct MockProductsGateway {
+        catalog_outcome: Outcome<Vec<ProductReferenceCard>>,
         call_count: AtomicUsize,
     }
 
-    impl MockEduGateway {
+    impl MockProductsGateway {
         fn calls(&self) -> usize {
             self.call_count.load(Ordering::SeqCst)
         }
 
-        fn gateway_error() -> EduGatewayError {
-            EduGatewayError::Transport(NexusTransportError::Timeout { after: Duration::from_secs(10) })
+        fn gateway_error() -> ProductsGatewayError {
+            ProductsGatewayError::Transport(NexusTransportError::Timeout { after: Duration::from_secs(15) })
         }
     }
 
     #[async_trait::async_trait]
-    impl EduGateway for MockEduGateway {
-        async fn request_learning_catalog(
+    impl ProductsGateway for MockProductsGateway {
+        async fn request_product_catalog(
             &self,
-            _consultant_id: &str,
             _filters: Option<&[String]>,
-        ) -> Result<Vec<LearningSnapshot>, EduGatewayError> {
+        ) -> Result<Vec<ProductReferenceCard>, ProductsGatewayError> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
             match &self.catalog_outcome {
                 Outcome::Ok(result) => Ok(result.clone()),
@@ -279,18 +299,18 @@ mod tests {
         }
     }
 
-    fn snapshot_fixture() -> LearningSnapshot {
-        LearningSnapshot {
-            course_id: "course-1".to_owned(),
-            title: "Cloud Security Fundamentals".to_owned(),
-            progress_status: "completed".to_owned(),
-            certification_status: Some("issued".to_owned()),
-            deep_link: Some("https://edu.cognitum.one/courses/course-1".to_owned()),
+    fn card_fixture() -> ProductReferenceCard {
+        ProductReferenceCard {
+            product_id: "product-1".to_owned(),
+            name: "Cloud Migration Accelerator".to_owned(),
+            packaging_summary: "4-week fixed-scope engagement".to_owned(),
+            pricing_guidance: "Starting at $50,000".to_owned(),
+            demo_assets: vec!["https://products.cognitum.one/demos/product-1.mp4".to_owned()],
         }
     }
 
-    fn default_mock_edu_gateway() -> MockEduGateway {
-        MockEduGateway { catalog_outcome: Outcome::Ok(vec![snapshot_fixture()]), call_count: AtomicUsize::new(0) }
+    fn default_mock_products_gateway() -> MockProductsGateway {
+        MockProductsGateway { catalog_outcome: Outcome::Ok(vec![card_fixture()]), call_count: AtomicUsize::new(0) }
     }
 
     async fn migrated_pool() -> (persistence::Pool, testcontainers_modules::testcontainers::ContainerAsync<Postgres>) {
@@ -319,7 +339,7 @@ mod tests {
 
     async fn test_app(
         capabilities: Vec<&'static str>,
-        mock_edu_gateway: Arc<MockEduGateway>,
+        mock_products_gateway: Arc<MockProductsGateway>,
     ) -> (Router<()>, Cookie<'static>, testcontainers_modules::testcontainers::ContainerAsync<Postgres>) {
         let (pool, container) = migrated_pool().await;
 
@@ -351,20 +371,20 @@ mod tests {
             sales_command_gateway: Arc::new(UnusedSalesGateway),
             commit_query_gateway: Arc::new(UnusedCommitGateway),
             commit_command_gateway: Arc::new(UnusedCommitGateway),
-            edu_gateway: mock_edu_gateway,
+            edu_gateway: Arc::new(UnusedEduGateway),
             capacity_query_gateway: Arc::new(UnusedCapacityGateway),
             capacity_command_gateway: Arc::new(UnusedCapacityGateway),
             customer_gateway: Arc::new(UnusedCustomerGateway),
             execution_query_gateway: Arc::new(UnusedExecutionGateway),
             execution_command_gateway: Arc::new(UnusedExecutionGateway),
-            products_gateway: Arc::new(UnusedProductsGateway),
+            products_gateway: mock_products_gateway,
             workflow_session_repository,
             notification_repository,
             action_queue_repository,
             event_bus: Arc::new(bff_core::EventBus::default()),
         };
 
-        let router = Router::new().nest("/api", edu_router(state.clone())).with_state(state);
+        let router = Router::new().nest("/api", products_router(state.clone())).with_state(state);
         let cookie = Cookie::new(session::SESSION_COOKIE_NAME, session.session_id.to_string());
 
         (router, cookie, container)
@@ -380,22 +400,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_catalog_relays_the_learning_snapshots_verbatim_when_permitted() {
-        let mock_gateway = Arc::new(default_mock_edu_gateway());
-        let (router, cookie, _container) = test_app(vec!["edu"], mock_gateway.clone()).await;
+    async fn get_catalog_relays_the_product_reference_cards_verbatim_when_permitted() {
+        let mock_gateway = Arc::new(default_mock_products_gateway());
+        let (router, cookie, _container) = test_app(vec!["products"], mock_gateway.clone()).await;
 
-        let response = router.oneshot(get_request(&cookie, "/api/edu/catalog")).await.unwrap();
+        let response = router.oneshot(get_request(&cookie, "/api/products/catalog")).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = response_json(response).await;
         assert_eq!(
             body,
             json!([{
-                "course_id": "course-1",
-                "title": "Cloud Security Fundamentals",
-                "progress_status": "completed",
-                "certification_status": "issued",
-                "deep_link": "https://edu.cognitum.one/courses/course-1",
+                "product_id": "product-1",
+                "name": "Cloud Migration Accelerator",
+                "packaging_summary": "4-week fixed-scope engagement",
+                "pricing_guidance": "Starting at $50,000",
+                "demo_assets": ["https://products.cognitum.one/demos/product-1.mp4"],
             }])
         );
         assert_eq!(mock_gateway.calls(), 1);
@@ -403,10 +423,10 @@ mod tests {
 
     #[tokio::test]
     async fn get_catalog_returns_403_and_never_calls_the_gateway_when_unpermitted() {
-        let mock_gateway = Arc::new(default_mock_edu_gateway());
+        let mock_gateway = Arc::new(default_mock_products_gateway());
         let (router, cookie, _container) = test_app(vec![], mock_gateway.clone()).await;
 
-        let response = router.oneshot(get_request(&cookie, "/api/edu/catalog")).await.unwrap();
+        let response = router.oneshot(get_request(&cookie, "/api/products/catalog")).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(mock_gateway.calls(), 0, "the 403 short-circuit must happen before any gateway call");
@@ -414,10 +434,11 @@ mod tests {
 
     #[tokio::test]
     async fn get_catalog_never_returns_a_synthetic_success_when_the_gateway_errors() {
-        let mock_gateway = Arc::new(MockEduGateway { catalog_outcome: Outcome::Err, call_count: AtomicUsize::new(0) });
-        let (router, cookie, _container) = test_app(vec!["edu"], mock_gateway.clone()).await;
+        let mock_gateway =
+            Arc::new(MockProductsGateway { catalog_outcome: Outcome::Err, call_count: AtomicUsize::new(0) });
+        let (router, cookie, _container) = test_app(vec!["products"], mock_gateway.clone()).await;
 
-        let response = router.oneshot(get_request(&cookie, "/api/edu/catalog")).await.unwrap();
+        let response = router.oneshot(get_request(&cookie, "/api/products/catalog")).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
         assert_eq!(mock_gateway.calls(), 1);

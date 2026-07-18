@@ -343,6 +343,18 @@ mod tests {
         }
     }
 
+    struct UnusedProductsGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::ProductsGateway for UnusedProductsGateway {
+        async fn request_product_catalog(
+            &self,
+            _filters: Option<&[String]>,
+        ) -> Result<Vec<nexus_client::ProductReferenceCard>, nexus_client::ProductsGatewayError> {
+            unimplemented!("notifications_sse tests never call the products gateway")
+        }
+    }
+
     fn dev_config() -> config::Config {
         config::Config {
             database_url: "postgres://localhost:5432/test".to_owned(),
@@ -388,6 +400,7 @@ mod tests {
             customer_gateway: Arc::new(UnusedCustomerGateway),
             execution_query_gateway: Arc::new(UnusedExecutionGateway),
             execution_command_gateway: Arc::new(UnusedExecutionGateway),
+            products_gateway: Arc::new(UnusedProductsGateway),
             workflow_session_repository: Arc::new(persistence::PgWorkflowSessionRepository::new(pool.clone())),
             notification_repository,
             action_queue_repository,
