@@ -22,11 +22,14 @@ import { useSession } from '../../lib/SessionContext'
  * # No auto-retry on a failed submission (ADR-016)
  * `POST /api/landscape/observations` maps to
  * `LandscapeGateway::submit_field_observation`, a non-idempotent command —
- * per ADR-016 this repo never auto-retries it. `useMutation`'s own default
- * (`retry: false` at the `QueryClient` level, set once in `App.tsx`) already
- * covers this; a failed submission surfaces an error alert and leaves the
- * form's text intact so the consultant can consciously re-click "Submit
- * Observation" — a fresh, deliberate re-submission, never an automatic one.
+ * per ADR-016 this repo never auto-retries it. TanStack Query's own default
+ * for `useMutation` (unlike `useQuery`, which defaults to 3 retries) is no
+ * retry at all, and this repo's shared `QueryClient` (`lib/queryClient.ts`,
+ * provided at the root in `main.tsx`) sets no `mutations.retry` override, so
+ * that default already covers this; a failed submission surfaces an error
+ * alert and leaves the form's text intact so the consultant can consciously
+ * re-click "Submit Observation" — a fresh, deliberate re-submission, never
+ * an automatic one.
  */
 export interface IntelligenceDigestItem {
   intel_id: string

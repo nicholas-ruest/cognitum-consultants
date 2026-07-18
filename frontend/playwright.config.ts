@@ -8,6 +8,19 @@ import { defineConfig, devices } from '@playwright/test'
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
+  // Every spec authenticates as the same fixed dev consultant identity
+  // (`auth::dev_stub::DEV_CONSULTANT_ID`, ADR-008) against one shared
+  // Postgres instance for the whole run — there is no per-test identity or
+  // data isolation. Several specs (capacity/customer/edu/landscape/products)
+  // read-modify-write that consultant's `DashboardConfiguration` (`GET
+  // /api/dashboard` then `PUT` back with their own card appended) to add
+  // their card before asserting on it. Run concurrently across workers,
+  // that read-modify-write races: two specs can both `GET` the same
+  // pre-append layout, and whichever `PUT`s last silently drops the other's
+  // card, failing that spec's "card renders" assertion nondeterministically.
+  // `workers: 1` serializes the whole run so no two specs ever interleave
+  // their `GET`/`PUT` pair against this shared consultant record.
+  workers: 1,
   // 'list' for readable console output either way; 'html' additionally
   // (written to playwright-report/, not opened automatically) so CI has
   // something to upload as an artifact on failure (.github/workflows/ci.yml

@@ -117,17 +117,26 @@ test('logs in, sees the delivery workspace, requests task completion through the
   // chain `notifications-sse.spec.ts` proves, this time landing as an
   // `ActionQueueEntry` (per PROMPT-38's classifier wiring) rather than a
   // `NotificationItem`.
-  await expect(page.getByText('Task Assigned')).toBeVisible({ timeout: 20_000 })
-  await expect(page.getByText('You have been assigned a new delivery task (e2e check).')).toBeVisible()
+  //
+  // Scoped to the Action Queue card's own list item (not a page-wide
+  // `page.getByText(...)`) from this point on: when this spec runs as part
+  // of the full suite (not in isolation), sibling dashboard cards other
+  // specs have already added to this same shared dev consultant's layout —
+  // e.g. Edu's own per-course status badges, one of which literally reads
+  // "completed" — can otherwise collide with a page-wide "Completed"/"In
+  // Progress" text lookup and trip Playwright's strict-mode check.
+  const actionQueueEntry = page.getByRole('listitem').filter({ hasText: 'Task Assigned' })
+  await expect(actionQueueEntry).toBeVisible({ timeout: 20_000 })
+  await expect(actionQueueEntry.getByText('You have been assigned a new delivery task (e2e check).')).toBeVisible()
 
   // 7. Confirmed-completion semantics: a "Take Action" button exists (the
   // bare consultant click, `Pending -> InProgress`), but no button on this
   // card ever completes the entry directly — completion only ever arrives
   // via a confirmation event through the ingestion pipeline, which this
   // spec's fixture never sends.
-  const takeActionButton = page.getByRole('button', { name: 'Take Action' })
+  const takeActionButton = actionQueueEntry.getByRole('button', { name: 'Take Action' })
   await expect(takeActionButton).toBeVisible()
-  await expect(page.getByRole('button', { name: /complete/i })).toHaveCount(0)
+  await expect(actionQueueEntry.getByRole('button', { name: /complete/i })).toHaveCount(0)
 
   const [startResponse] = await Promise.all([
     page.waitForResponse((res) => /\/api\/action-queue\/.+\/start$/.test(res.url()) && res.request().method() === 'POST'),
@@ -135,9 +144,9 @@ test('logs in, sees the delivery workspace, requests task completion through the
   ])
   expect(startResponse.status()).toBe(200)
 
-  await expect(page.getByText('In Progress')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Take Action' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /complete/i })).toHaveCount(0)
+  await expect(actionQueueEntry.getByText('In Progress')).toBeVisible()
+  await expect(actionQueueEntry.getByRole('button', { name: 'Take Action' })).toHaveCount(0)
+  await expect(actionQueueEntry.getByRole('button', { name: /complete/i })).toHaveCount(0)
 
   // 8. Confirmation, proven end-to-end (not just "no button completes it"):
   // queue a `task_completed` event referencing step 5's `TaskAssigned`
@@ -159,6 +168,6 @@ test('logs in, sees the delivery workspace, requests task completion through the
   })
   expect(confirmationEnqueueResponse.ok()).toBe(true)
 
-  await expect(page.getByText('Completed')).toBeVisible({ timeout: 20_000 })
-  await expect(page.getByText('In Progress')).not.toBeVisible()
+  await expect(actionQueueEntry.getByText('Completed')).toBeVisible({ timeout: 20_000 })
+  await expect(actionQueueEntry.getByText('In Progress')).not.toBeVisible()
 })
