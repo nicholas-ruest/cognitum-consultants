@@ -1,19 +1,27 @@
 //! Wiremock-backed tests for the Armor ACL gateway (`ArmorGateway`,
-//! `NexusArmorGateway`) — PROMPT-14 / U14.
+//! `NexusArmorGateway`) — PROMPT-14 / U14, ADR-029.
 //!
-//! Per the module docs on `nexus_client::armor`, the gateway expects Armor's
-//! response body wrapped in an `{"assertions": [...]}` envelope.
+//! Post-ADR-029 every call is `POST capabilities/armor.assertions` carrying
+//! a `CapabilityRequest` envelope; the gateway unwraps
+//! `CapabilityResponse.payload`, still expecting an `{"assertions": [...]}`
+//! object inside it. Identity now travels in the envelope's `actor`
+//! (a placeholder today), so the old `Bearer` credential header is gone.
 
 use std::sync::Arc;
 
 use nexus_client::{ArmorGateway, ArmorGatewayError, NexusArmorGateway, ReqwestNexusTransport};
-use wiremock::matchers::{header, method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn gateway_for(mock_server: &MockServer) -> NexusArmorGateway {
     let transport =
         Arc::new(ReqwestNexusTransport::with_client(reqwest::Client::new(), &mock_server.uri()).expect("valid url"));
     NexusArmorGateway::new(transport)
+}
+
+fn ok(payload: serde_json::Value) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "request_id": "req-test", "success": true, "payload": payload }))
 }
 
 fn assertion_json(consultant_id: &str, capability: &str, scope: &str, expires_at: &str) -> serde_json::Value {
@@ -35,10 +43,14 @@ async fn parses_five_varied_permission_assertions() {
         assertion_json("consultant-1", "nav.landscape", "global", "2026-07-20T08:00:00Z"),
         assertion_json("consultant-1", "capacity.request", "team:alpha", "2026-12-31T23:59:59Z"),
     ];
-    Mock::given(method("GET"))
-        .and(path("/armor/v1/assertions"))
-        .and(query_param("consultant_id", "consultant-1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "assertions": assertions })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/armor.assertions"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "armor.assertions",
+            "target_repo": "cognitum-armor",
+            "payload": { "consultant_id": "consultant-1" }
+        })))
+        .respond_with(ok(serde_json::json!({ "assertions": assertions })))
         .mount(&mock_server)
         .await;
 
@@ -57,10 +69,9 @@ async fn parses_five_varied_permission_assertions() {
 async fn parses_exactly_one_permission_assertion() {
     let mock_server = MockServer::start().await;
     let assertions = vec![assertion_json("consultant-2", "dashboard.view", "global", "2026-08-01T00:00:00Z")];
-    Mock::given(method("GET"))
-        .and(path("/armor/v1/assertions"))
-        .and(query_param("consultant_id", "consultant-2"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "assertions": assertions })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/armor.assertions"))
+        .respond_with(ok(serde_json::json!({ "assertions": assertions })))
         .mount(&mock_server)
         .await;
 
@@ -74,10 +85,9 @@ async fn parses_exactly_one_permission_assertion() {
 #[tokio::test]
 async fn returns_empty_vec_for_zero_permission_assertions() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/armor/v1/assertions"))
-        .and(query_param("consultant_id", "consultant-3"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "assertions": [] })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/armor.assertions"))
+        .respond_with(ok(serde_json::json!({ "assertions": [] })))
         .mount(&mock_server)
         .await;
 
@@ -88,16 +98,14 @@ async fn returns_empty_vec_for_zero_permission_assertions() {
 }
 
 #[tokio::test]
-async fn returns_gateway_error_not_panic_on_malformed_response_shape() {
+async fn returns_gateway_error_not_panic_on_malformed_payload_shape() {
     let mock_server = MockServer::start().await;
-    // Missing the "assertions" envelope field entirely, and the wrong shape
-    // (bare array) besides — this must surface as an error, not a panic.
-    Mock::given(method("GET"))
-        .and(path("/armor/v1/assertions"))
-        .and(query_param("consultant_id", "consultant-4"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-            { "unexpected": "shape" }
-        ])))
+    // Well-formed envelope, but its `payload` is the wrong shape (a bare
+    // array, missing the `assertions` field) — this must surface as an
+    // error, not a panic.
+    Mock::given(method("POST"))
+        .and(path("/capabilities/armor.assertions"))
+        .respond_with(ok(serde_json::json!([{ "unexpected": "shape" }])))
         .mount(&mock_server)
         .await;
 
@@ -111,23 +119,19 @@ async fn returns_gateway_error_not_panic_on_malformed_response_shape() {
 }
 
 #[tokio::test]
-async fn attaches_authorization_header_with_correct_credential() {
+async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/armor/v1/assertions"))
-        .and(query_param("consultant_id", "consultant-5"))
-        .and(header("authorization", "Bearer secret-session-token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "assertions": [] })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/armor.assertions"))
+        .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;
 
     let gateway = gateway_for(&mock_server);
-    gateway.fetch_assertions("consultant-5", "secret-session-token").await.expect("fetch succeeds");
+    let result = gateway.fetch_assertions("consultant-5", "test-credential").await;
 
-    let received = mock_server.received_requests().await.expect("recording enabled");
-    assert_eq!(received.len(), 1);
-    assert_eq!(
-        received[0].headers.get("authorization").expect("authorization header present"),
-        "Bearer secret-session-token"
-    );
+    match result {
+        Err(ArmorGatewayError::Transport(_)) => {}
+        other => panic!("expected Transport error, got {other:?}"),
+    }
 }

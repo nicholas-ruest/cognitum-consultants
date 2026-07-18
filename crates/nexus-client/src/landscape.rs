@@ -103,10 +103,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use reqwest::Method;
-use reqwest::header::HeaderMap;
 
-use crate::transport::{NexusRequest, NexusTransport, NexusTransportError};
+use crate::transport::{CapabilityCall, CapabilityCaller, NexusTransport, NexusTransportError};
+
+/// ADR-029 capability ids + target repo for this gateway's two calls.
+const CAPABILITY_INTELLIGENCE: &str = "landscape.intelligence";
+const CAPABILITY_OBSERVATIONS: &str = "landscape.observations";
+const TARGET_REPO: &str = "cognitum-landscape";
 
 /// Landscape's Market Intelligence Digest item projection
 /// (`anti-corruption-layers.md` §8): this repo never models Landscape's full
@@ -157,8 +160,6 @@ pub struct FieldObservationSubmission {
 pub enum LandscapeGatewayError {
     #[error(transparent)]
     Transport(#[from] NexusTransportError),
-    #[error("Landscape returned a non-success status {status}")]
-    UnexpectedStatus { status: reqwest::StatusCode },
     #[error("Landscape returned a response body that did not match the expected shape: {0}")]
     UnexpectedResponseShape(#[source] serde_json::Error),
 }
@@ -187,50 +188,45 @@ pub trait LandscapeGateway: Send + Sync {
 /// [`LandscapeGateway`] implementation backed by a [`NexusTransport`]. See
 /// the module docs for the required transport decoration per method.
 pub struct NexusLandscapeGateway {
-    transport: Arc<dyn NexusTransport>,
+    caller: CapabilityCaller,
 }
 
 impl NexusLandscapeGateway {
     /// See the module docs for the required transport decoration (read
     /// timeout + optional retry for `request_intelligence_digest`; write
-    /// timeout, never retried, for `submit_field_observation`).
+    /// timeout, never retried, for `submit_field_observation`). The
+    /// `transport` is wrapped in a [`CapabilityCaller`] so each method
+    /// issues the ADR-029 capability envelope.
     pub fn new(transport: Arc<dyn NexusTransport>) -> Self {
-        Self { transport }
+        Self { caller: CapabilityCaller::new(transport) }
     }
 }
 
 #[async_trait]
 impl LandscapeGateway for NexusLandscapeGateway {
     async fn request_intelligence_digest(&self) -> Result<Vec<IntelligenceDigestItem>, LandscapeGatewayError> {
-        let request = NexusRequest {
-            method: Method::GET,
-            path: "landscape/v1/intelligence".to_string(),
-            headers: HeaderMap::new(),
-            body: None,
-        };
-        let response = self.transport.send(request).await?;
-
-        if !response.status.is_success() {
-            return Err(LandscapeGatewayError::UnexpectedStatus { status: response.status });
-        }
+        let response_payload = self
+            .caller
+            .call(CapabilityCall {
+                capability_id: CAPABILITY_INTELLIGENCE.to_owned(),
+                target_repo: TARGET_REPO.to_owned(),
+                payload: serde_json::json!({}),
+            })
+            .await?;
 
         let envelope: IntelligenceDigestEnvelope =
-            serde_json::from_value(response.body).map_err(LandscapeGatewayError::UnexpectedResponseShape)?;
+            serde_json::from_value(response_payload).map_err(LandscapeGatewayError::UnexpectedResponseShape)?;
         Ok(envelope.items)
     }
 
     async fn submit_field_observation(&self, submission: FieldObservationSubmission) -> Result<(), LandscapeGatewayError> {
-        let request = NexusRequest {
-            method: Method::POST,
-            path: "landscape/v1/observations".to_string(),
-            headers: HeaderMap::new(),
-            body: Some(serde_json::to_value(&submission).expect("submission always serializes")),
-        };
-        let response = self.transport.send(request).await?;
-
-        if !response.status.is_success() {
-            return Err(LandscapeGatewayError::UnexpectedStatus { status: response.status });
-        }
+        self.caller
+            .call(CapabilityCall {
+                capability_id: CAPABILITY_OBSERVATIONS.to_owned(),
+                target_repo: TARGET_REPO.to_owned(),
+                payload: serde_json::to_value(&submission).expect("submission always serializes"),
+            })
+            .await?;
         Ok(())
     }
 }

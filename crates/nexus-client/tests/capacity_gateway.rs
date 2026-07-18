@@ -1,22 +1,27 @@
 //! Wiremock-backed tests for the Capacity ACL gateway (`CapacityGateway`,
-//! `NexusCapacityGateway`) — PROMPT-36.
+//! `NexusCapacityGateway`) — PROMPT-36, ADR-029.
 //!
-//! Mirrors `commit_gateway.rs`'s structure: a request-body-shape assertion
-//! for `update_own_profile`, both a `ProfileUpdateAccepted` and a
-//! `ProfileUpdateRejected { reason }` fixture (`anti-corruption-layers.md`
-//! §4's two named inbound events), a `get_own_profile` query-param
-//! assertion, and malformed-response error-not-panic cases for both calls.
+//! Post-ADR-029 both the read (`get_own_profile`) and the write
+//! (`update_own_profile`) are `POST capabilities/capacity.profile` carrying a
+//! `CapabilityRequest` envelope; the nexus fixture distinguishes them by
+//! payload (a bare `consultant_id` vs. a `profile_fields`-carrying body). The
+//! gateway unwraps `CapabilityResponse.payload`.
 
 use std::sync::Arc;
 
 use nexus_client::{CapacityGateway, CapacityGatewayError, ConsultantProfileIntake, NexusCapacityGateway};
-use wiremock::matchers::{body_json, method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn gateway_for(mock_server: &MockServer) -> NexusCapacityGateway {
     let transport =
         Arc::new(nexus_client::ReqwestNexusTransport::with_client(reqwest::Client::new(), &mock_server.uri()).expect("valid url"));
     NexusCapacityGateway::new(transport)
+}
+
+fn ok(payload: serde_json::Value) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "request_id": "req-test", "success": true, "payload": payload }))
 }
 
 fn profile_fixture() -> ConsultantProfileIntake {
@@ -30,23 +35,25 @@ fn profile_fixture() -> ConsultantProfileIntake {
 }
 
 #[tokio::test]
-async fn update_own_profile_sends_correct_command_body_and_parses_an_accepted_fixture() {
+async fn update_own_profile_sends_correct_envelope_payload_and_parses_an_accepted_fixture() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capacity/v1/profile"))
-        .and(body_json(serde_json::json!({
-            "consultant_id": "consultant-1",
-            "profile_fields": {
-                "skills": ["Rust", "Cloud Architecture"],
-                "certifications": ["AWS Solutions Architect"],
-                "languages": ["English", "French"],
-                "availability_window": "2026-08-01/2026-12-31",
-                "geographic_coverage": ["EMEA"]
+        .and(path("/capabilities/capacity.profile"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "capacity.profile",
+            "target_repo": "cognitum-capacity",
+            "payload": {
+                "consultant_id": "consultant-1",
+                "profile_fields": {
+                    "skills": ["Rust", "Cloud Architecture"],
+                    "certifications": ["AWS Solutions Architect"],
+                    "languages": ["English", "French"],
+                    "availability_window": "2026-08-01/2026-12-31",
+                    "geographic_coverage": ["EMEA"]
+                }
             }
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "accepted": true
-        })))
+        .respond_with(ok(serde_json::json!({ "accepted": true })))
         .mount(&mock_server)
         .await;
 
@@ -64,8 +71,8 @@ async fn update_own_profile_sends_correct_command_body_and_parses_an_accepted_fi
 async fn update_own_profile_parses_a_rejected_fixture_with_a_reason() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capacity/v1/profile"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        .and(path("/capabilities/capacity.profile"))
+        .respond_with(ok(serde_json::json!({
             "accepted": false,
             "reason": "availability_window overlaps an existing commitment"
         })))
@@ -80,12 +87,12 @@ async fn update_own_profile_parses_a_rejected_fixture_with_a_reason() {
 }
 
 #[tokio::test]
-async fn get_own_profile_sends_consultant_id_as_a_query_param_and_parses_the_profile() {
+async fn get_own_profile_sends_consultant_id_in_the_payload_and_parses_the_profile() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/capacity/v1/profile"))
-        .and(query_param("consultant_id", "consultant-1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    Mock::given(method("POST"))
+        .and(path("/capabilities/capacity.profile"))
+        .and(body_partial_json(serde_json::json!({ "payload": { "consultant_id": "consultant-1" } })))
+        .respond_with(ok(serde_json::json!({
             "skills": ["Rust", "Cloud Architecture"],
             "certifications": ["AWS Solutions Architect"],
             "languages": ["English", "French"],
@@ -104,9 +111,9 @@ async fn get_own_profile_sends_consultant_id_as_a_query_param_and_parses_the_pro
 #[tokio::test]
 async fn get_own_profile_handles_an_empty_profile() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/capacity/v1/profile"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    Mock::given(method("POST"))
+        .and(path("/capabilities/capacity.profile"))
+        .respond_with(ok(serde_json::json!({
             "skills": [],
             "certifications": [],
             "languages": [],
@@ -124,15 +131,13 @@ async fn get_own_profile_handles_an_empty_profile() {
 }
 
 #[tokio::test]
-async fn returns_gateway_error_not_panic_on_malformed_update_own_profile_response() {
+async fn returns_gateway_error_not_panic_on_malformed_update_own_profile_payload() {
     let mock_server = MockServer::start().await;
-    // Missing the required `accepted` field entirely — this must surface as
-    // an error, not a panic.
+    // Well-formed envelope, but its `payload` is missing the required
+    // `accepted` field.
     Mock::given(method("POST"))
-        .and(path("/capacity/v1/profile"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "unexpected": "shape"
-        })))
+        .and(path("/capabilities/capacity.profile"))
+        .respond_with(ok(serde_json::json!({ "unexpected": "shape" })))
         .mount(&mock_server)
         .await;
 
@@ -146,12 +151,13 @@ async fn returns_gateway_error_not_panic_on_malformed_update_own_profile_respons
 }
 
 #[tokio::test]
-async fn returns_gateway_error_not_panic_on_malformed_get_own_profile_response() {
+async fn returns_gateway_error_not_panic_on_malformed_get_own_profile_payload() {
     let mock_server = MockServer::start().await;
-    // A bare array instead of the expected `ConsultantProfileIntake` object.
-    Mock::given(method("GET"))
-        .and(path("/capacity/v1/profile"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+    // Well-formed envelope, but its `payload` is a bare array instead of a
+    // `ConsultantProfileIntake` object.
+    Mock::given(method("POST"))
+        .and(path("/capabilities/capacity.profile"))
+        .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
         .await;
 
@@ -165,10 +171,10 @@ async fn returns_gateway_error_not_panic_on_malformed_get_own_profile_response()
 }
 
 #[tokio::test]
-async fn returns_unexpected_status_error_on_non_success_response() {
+async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capacity/v1/profile"))
+        .and(path("/capabilities/capacity.profile"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;
@@ -177,7 +183,7 @@ async fn returns_unexpected_status_error_on_non_success_response() {
     let result = gateway.update_own_profile("consultant-1", profile_fixture()).await;
 
     match result {
-        Err(CapacityGatewayError::UnexpectedStatus { .. }) => {}
-        other => panic!("expected UnexpectedStatus error, got {other:?}"),
+        Err(CapacityGatewayError::Transport(_)) => {}
+        other => panic!("expected Transport error, got {other:?}"),
     }
 }

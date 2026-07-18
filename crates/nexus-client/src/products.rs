@@ -63,10 +63,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use reqwest::Method;
-use reqwest::header::HeaderMap;
 
-use crate::transport::{NexusRequest, NexusTransport, NexusTransportError};
+use crate::transport::{CapabilityCall, CapabilityCaller, NexusTransport, NexusTransportError};
+
+/// ADR-029 capability id + target repo for this gateway's single call.
+const CAPABILITY_CATALOG: &str = "products.catalog";
+const TARGET_REPO: &str = "cognitum-products";
 
 /// Products' approved-for-selling Product Reference Card projection
 /// (`anti-corruption-layers.md` §7): this repo never becomes a second store
@@ -106,8 +108,6 @@ struct ProductCatalogEnvelope {
 pub enum ProductsGatewayError {
     #[error(transparent)]
     Transport(#[from] NexusTransportError),
-    #[error("Products returned a non-success status {status}")]
-    UnexpectedStatus { status: reqwest::StatusCode },
     #[error("Products returned a response body that did not match the expected shape: {0}")]
     UnexpectedResponseShape(#[source] serde_json::Error),
 }
@@ -139,16 +139,17 @@ pub trait ProductsGateway: Send + Sync {
 /// [`ProductsGateway`] implementation backed by a [`NexusTransport`]. See
 /// the module docs for the required transport decoration.
 pub struct NexusProductsGateway {
-    transport: Arc<dyn NexusTransport>,
+    caller: CapabilityCaller,
 }
 
 impl NexusProductsGateway {
     /// `transport` is expected to already be decorated per the ADR-016
     /// longest-read-timeout + most-aggressive-retry convention (see module
     /// docs) — this constructor does not assemble timeout/retry/
-    /// circuit-breaker layers itself.
+    /// circuit-breaker layers itself. It is wrapped in a [`CapabilityCaller`]
+    /// so this gateway issues the ADR-029 capability envelope.
     pub fn new(transport: Arc<dyn NexusTransport>) -> Self {
-        Self { transport }
+        Self { caller: CapabilityCaller::new(transport) }
     }
 }
 
@@ -158,28 +159,24 @@ impl ProductsGateway for NexusProductsGateway {
         &self,
         filters: Option<&[String]>,
     ) -> Result<Vec<ProductReferenceCard>, ProductsGatewayError> {
-        let path = {
-            let mut query = url::form_urlencoded::Serializer::new(String::new());
-            for filter in filters.unwrap_or_default() {
-                query.append_pair("filter", filter);
-            }
-            let query_string = query.finish();
-            if query_string.is_empty() {
-                "products/v1/catalog".to_string()
-            } else {
-                format!("products/v1/catalog?{query_string}")
-            }
+        // `filters`, when present, is passed through untouched (this repo has
+        // no opinion on the filter vocabulary — see the trait method docs).
+        let payload = match filters.filter(|f| !f.is_empty()) {
+            Some(filters) => serde_json::json!({ "filters": filters }),
+            None => serde_json::json!({}),
         };
 
-        let request = NexusRequest { method: Method::GET, path, headers: HeaderMap::new(), body: None };
-        let response = self.transport.send(request).await?;
-
-        if !response.status.is_success() {
-            return Err(ProductsGatewayError::UnexpectedStatus { status: response.status });
-        }
+        let response_payload = self
+            .caller
+            .call(CapabilityCall {
+                capability_id: CAPABILITY_CATALOG.to_owned(),
+                target_repo: TARGET_REPO.to_owned(),
+                payload,
+            })
+            .await?;
 
         let envelope: ProductCatalogEnvelope =
-            serde_json::from_value(response.body).map_err(ProductsGatewayError::UnexpectedResponseShape)?;
+            serde_json::from_value(response_payload).map_err(ProductsGatewayError::UnexpectedResponseShape)?;
         Ok(envelope.cards)
     }
 }

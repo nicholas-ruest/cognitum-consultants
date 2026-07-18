@@ -89,10 +89,16 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use reqwest::Method;
-use reqwest::header::HeaderMap;
 
-use crate::transport::{NexusRequest, NexusTransport, NexusTransportError};
+use crate::transport::{CapabilityCall, CapabilityCaller, NexusTransport, NexusTransportError};
+
+/// ADR-029 capability id + target repo. Both the read (`get_own_profile`)
+/// and the write (`update_own_profile`) share this one capability id — they
+/// shared one path (`capacity/v1/profile`) before — so the nexus fixture
+/// distinguishes them by the request payload (a bare `consultant_id` for the
+/// read vs. a `profile_fields`-carrying body for the write).
+const CAPABILITY_PROFILE: &str = "capacity.profile";
+const TARGET_REPO: &str = "cognitum-capacity";
 
 /// Capacity's restricted Consultant Profile Intake shape
 /// (`anti-corruption-layers.md` §4): "this repo's ACL is intentionally
@@ -140,8 +146,6 @@ struct UpdateOwnProfileCommand<'a> {
 pub enum CapacityGatewayError {
     #[error(transparent)]
     Transport(#[from] NexusTransportError),
-    #[error("Capacity returned a non-success status {status}")]
-    UnexpectedStatus { status: reqwest::StatusCode },
     #[error("Capacity returned a response body that did not match the expected shape: {0}")]
     UnexpectedResponseShape(#[source] serde_json::Error),
 }
@@ -173,15 +177,17 @@ pub trait CapacityGateway: Send + Sync {
 /// [`CapacityGateway`] implementation backed by a [`NexusTransport`]. See
 /// the module docs for the required transport decoration per method.
 pub struct NexusCapacityGateway {
-    transport: Arc<dyn NexusTransport>,
+    caller: CapabilityCaller,
 }
 
 impl NexusCapacityGateway {
     /// See the module docs for the required transport decoration (read
     /// timeout + optional retry for `get_own_profile`; write timeout, never
-    /// retried, for `update_own_profile`).
+    /// retried, for `update_own_profile`). The `transport` is wrapped in a
+    /// [`CapabilityCaller`] so each method issues the ADR-029 capability
+    /// envelope.
     pub fn new(transport: Arc<dyn NexusTransport>) -> Self {
-        Self { transport }
+        Self { caller: CapabilityCaller::new(transport) }
     }
 }
 
@@ -193,35 +199,28 @@ impl CapacityGateway for NexusCapacityGateway {
         profile_fields: ConsultantProfileIntake,
     ) -> Result<ProfileUpdateResult, CapacityGatewayError> {
         let command = UpdateOwnProfileCommand { consultant_id, profile_fields: &profile_fields };
-        let request = NexusRequest {
-            method: Method::POST,
-            path: "capacity/v1/profile".to_string(),
-            headers: HeaderMap::new(),
-            body: Some(serde_json::to_value(&command).expect("command always serializes")),
-        };
-        let response = self.transport.send(request).await?;
+        let response_payload = self
+            .caller
+            .call(CapabilityCall {
+                capability_id: CAPABILITY_PROFILE.to_owned(),
+                target_repo: TARGET_REPO.to_owned(),
+                payload: serde_json::to_value(&command).expect("command always serializes"),
+            })
+            .await?;
 
-        if !response.status.is_success() {
-            return Err(CapacityGatewayError::UnexpectedStatus { status: response.status });
-        }
-
-        serde_json::from_value(response.body).map_err(CapacityGatewayError::UnexpectedResponseShape)
+        serde_json::from_value(response_payload).map_err(CapacityGatewayError::UnexpectedResponseShape)
     }
 
     async fn get_own_profile(&self, consultant_id: &str) -> Result<ConsultantProfileIntake, CapacityGatewayError> {
-        let path = {
-            let mut query = url::form_urlencoded::Serializer::new(String::new());
-            query.append_pair("consultant_id", consultant_id);
-            format!("capacity/v1/profile?{}", query.finish())
-        };
+        let response_payload = self
+            .caller
+            .call(CapabilityCall {
+                capability_id: CAPABILITY_PROFILE.to_owned(),
+                target_repo: TARGET_REPO.to_owned(),
+                payload: serde_json::json!({ "consultant_id": consultant_id }),
+            })
+            .await?;
 
-        let request = NexusRequest { method: Method::GET, path, headers: HeaderMap::new(), body: None };
-        let response = self.transport.send(request).await?;
-
-        if !response.status.is_success() {
-            return Err(CapacityGatewayError::UnexpectedStatus { status: response.status });
-        }
-
-        serde_json::from_value(response.body).map_err(CapacityGatewayError::UnexpectedResponseShape)
+        serde_json::from_value(response_payload).map_err(CapacityGatewayError::UnexpectedResponseShape)
     }
 }

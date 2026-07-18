@@ -1,16 +1,15 @@
 //! Wiremock-backed tests for the Customer ACL gateway (`CustomerGateway`,
-//! `NexusCustomerGateway`) — PROMPT-37.
+//! `NexusCustomerGateway`) — PROMPT-37, ADR-029.
 //!
-//! Mirrors `edu_gateway.rs`'s structure: a request-shape assertion for the
-//! one outbound call (including the optional `customer_id` narrowing
-//! param), several `CustomerContextCard` fixture scenarios (proving the
-//! gateway against more than one `health_status`), and a malformed-response
-//! error-not-panic case.
+//! Post-ADR-029 every call is `POST capabilities/customer.context` carrying a
+//! `CapabilityRequest` envelope; the optional `customer_id` narrowing travels
+//! in the payload. The gateway unwraps `CapabilityResponse.payload`, still
+//! expecting a `{"contexts": [...]}` object.
 
 use std::sync::Arc;
 
 use nexus_client::{CustomerGateway, CustomerGatewayError, NexusCustomerGateway};
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn gateway_for(mock_server: &MockServer) -> NexusCustomerGateway {
@@ -19,13 +18,22 @@ fn gateway_for(mock_server: &MockServer) -> NexusCustomerGateway {
     NexusCustomerGateway::new(transport)
 }
 
+fn ok(payload: serde_json::Value) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "request_id": "req-test", "success": true, "payload": payload }))
+}
+
 #[tokio::test]
-async fn request_assigned_customer_context_sends_consultant_id_as_a_query_param_and_parses_the_envelope() {
+async fn request_assigned_customer_context_sends_consultant_id_in_the_payload_and_parses_the_envelope() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/customer/v1/context"))
-        .and(query_param("consultant_id", "consultant-1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    Mock::given(method("POST"))
+        .and(path("/capabilities/customer.context"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "customer.context",
+            "target_repo": "cognitum-customer",
+            "payload": { "consultant_id": "consultant-1" }
+        })))
+        .respond_with(ok(serde_json::json!({
             "contexts": [
                 {
                     "customer_id": "customer-1",
@@ -61,13 +69,14 @@ async fn request_assigned_customer_context_sends_consultant_id_as_a_query_param_
 }
 
 #[tokio::test]
-async fn request_assigned_customer_context_sends_an_optional_customer_id_query_param_when_narrowing() {
+async fn request_assigned_customer_context_sends_an_optional_customer_id_in_the_payload_when_narrowing() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/customer/v1/context"))
-        .and(query_param("consultant_id", "consultant-1"))
-        .and(query_param("customer_id", "customer-2"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    Mock::given(method("POST"))
+        .and(path("/capabilities/customer.context"))
+        .and(body_partial_json(serde_json::json!({
+            "payload": { "consultant_id": "consultant-1", "customer_id": "customer-2" }
+        })))
+        .respond_with(ok(serde_json::json!({
             "contexts": [
                 {
                     "customer_id": "customer-2",
@@ -94,9 +103,9 @@ async fn request_assigned_customer_context_sends_an_optional_customer_id_query_p
 #[tokio::test]
 async fn request_assigned_customer_context_handles_an_empty_result() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/customer/v1/context"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "contexts": [] })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/customer.context"))
+        .respond_with(ok(serde_json::json!({ "contexts": [] })))
         .mount(&mock_server)
         .await;
 
@@ -107,12 +116,13 @@ async fn request_assigned_customer_context_handles_an_empty_result() {
 }
 
 #[tokio::test]
-async fn returns_gateway_error_not_panic_on_malformed_response() {
+async fn returns_gateway_error_not_panic_on_malformed_payload() {
     let mock_server = MockServer::start().await;
-    // A bare array instead of the expected `{"contexts": [...]}` envelope.
-    Mock::given(method("GET"))
-        .and(path("/customer/v1/context"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+    // Well-formed envelope, but its `payload` is a bare array instead of the
+    // expected `{"contexts": [...]}` object.
+    Mock::given(method("POST"))
+        .and(path("/capabilities/customer.context"))
+        .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
         .await;
 
@@ -126,10 +136,10 @@ async fn returns_gateway_error_not_panic_on_malformed_response() {
 }
 
 #[tokio::test]
-async fn returns_unexpected_status_error_on_non_success_response() {
+async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/customer/v1/context"))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/customer.context"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;
@@ -138,7 +148,7 @@ async fn returns_unexpected_status_error_on_non_success_response() {
     let result = gateway.request_assigned_customer_context("consultant-1", None).await;
 
     match result {
-        Err(CustomerGatewayError::UnexpectedStatus { .. }) => {}
-        other => panic!("expected UnexpectedStatus error, got {other:?}"),
+        Err(CustomerGatewayError::Transport(_)) => {}
+        other => panic!("expected Transport error, got {other:?}"),
     }
 }

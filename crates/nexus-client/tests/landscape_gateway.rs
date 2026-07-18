@@ -1,17 +1,16 @@
 //! Wiremock-backed tests for the Landscape ACL gateway (`LandscapeGateway`,
-//! `NexusLandscapeGateway`) — PROMPT-40.
+//! `NexusLandscapeGateway`) — PROMPT-40, ADR-029.
 //!
-//! Mirrors `execution_gateway.rs`'s structure: a request-body-shape
-//! assertion for the outbound command, a multi-item fixture scenario for the
-//! read (proving the gateway against more than one `IntelligenceDigestItem`
-//! shape, including one with no `deep_link`), and a malformed-response
-//! error-not-panic case.
+//! Post-ADR-029 the read is `POST capabilities/landscape.intelligence` and
+//! the write `POST capabilities/landscape.observations`, each carrying a
+//! `CapabilityRequest` envelope; the gateway unwraps
+//! `CapabilityResponse.payload`.
 
 use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
 use nexus_client::{FieldObservationSubmission, LandscapeGateway, LandscapeGatewayError, NexusLandscapeGateway};
-use wiremock::matchers::{body_json, method, path};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn gateway_for(mock_server: &MockServer) -> NexusLandscapeGateway {
@@ -20,12 +19,17 @@ fn gateway_for(mock_server: &MockServer) -> NexusLandscapeGateway {
     NexusLandscapeGateway::new(transport)
 }
 
+fn ok(payload: serde_json::Value) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "request_id": "req-test", "success": true, "payload": payload }))
+}
+
 #[tokio::test]
 async fn request_intelligence_digest_parses_a_multi_item_fixture() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/landscape/v1/intelligence"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    Mock::given(method("POST"))
+        .and(path("/capabilities/landscape.intelligence"))
+        .respond_with(ok(serde_json::json!({
             "items": [
                 {
                     "intel_id": "intel-1",
@@ -64,9 +68,9 @@ async fn request_intelligence_digest_parses_a_multi_item_fixture() {
 #[tokio::test]
 async fn request_intelligence_digest_handles_an_empty_result() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/landscape/v1/intelligence"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "items": [] })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/landscape.intelligence"))
+        .respond_with(ok(serde_json::json!({ "items": [] })))
         .mount(&mock_server)
         .await;
 
@@ -77,12 +81,13 @@ async fn request_intelligence_digest_handles_an_empty_result() {
 }
 
 #[tokio::test]
-async fn returns_gateway_error_not_panic_on_malformed_intelligence_digest_response() {
+async fn returns_gateway_error_not_panic_on_malformed_intelligence_digest_payload() {
     let mock_server = MockServer::start().await;
-    // A bare array instead of the expected `{"items": [...]}` envelope.
-    Mock::given(method("GET"))
-        .and(path("/landscape/v1/intelligence"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+    // Well-formed envelope, but its `payload` is a bare array instead of the
+    // expected `{"items": [...]}` object.
+    Mock::given(method("POST"))
+        .and(path("/capabilities/landscape.intelligence"))
+        .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
         .await;
 
@@ -96,16 +101,20 @@ async fn returns_gateway_error_not_panic_on_malformed_intelligence_digest_respon
 }
 
 #[tokio::test]
-async fn submit_field_observation_sends_the_submission_verbatim_as_the_request_body() {
+async fn submit_field_observation_sends_the_submission_in_the_payload() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/landscape/v1/observations"))
-        .and(body_json(serde_json::json!({
-            "observation_text": "Client mentioned a competitor's new offering.",
-            "related_company_reference": "acme-corp",
-            "submitted_by": "consultant-1"
+        .and(path("/capabilities/landscape.observations"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "landscape.observations",
+            "target_repo": "cognitum-landscape",
+            "payload": {
+                "observation_text": "Client mentioned a competitor's new offering.",
+                "related_company_reference": "acme-corp",
+                "submitted_by": "consultant-1"
+            }
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .respond_with(ok(serde_json::json!({})))
         .mount(&mock_server)
         .await;
 
@@ -126,12 +135,14 @@ async fn submit_field_observation_sends_the_submission_verbatim_as_the_request_b
 async fn submit_field_observation_omits_related_company_reference_when_none() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/landscape/v1/observations"))
-        .and(body_json(serde_json::json!({
-            "observation_text": "General market shift noted, no specific client tied to it.",
-            "submitted_by": "consultant-2"
+        .and(path("/capabilities/landscape.observations"))
+        .and(body_partial_json(serde_json::json!({
+            "payload": {
+                "observation_text": "General market shift noted, no specific client tied to it.",
+                "submitted_by": "consultant-2"
+            }
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .respond_with(ok(serde_json::json!({})))
         .mount(&mock_server)
         .await;
 
@@ -147,10 +158,10 @@ async fn submit_field_observation_omits_related_company_reference_when_none() {
 }
 
 #[tokio::test]
-async fn returns_unexpected_status_error_on_non_success_response() {
+async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/landscape/v1/observations"))
+        .and(path("/capabilities/landscape.observations"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;
@@ -164,7 +175,7 @@ async fn returns_unexpected_status_error_on_non_success_response() {
     let result = gateway.submit_field_observation(submission).await;
 
     match result {
-        Err(LandscapeGatewayError::UnexpectedStatus { .. }) => {}
-        other => panic!("expected UnexpectedStatus error, got {other:?}"),
+        Err(LandscapeGatewayError::Transport(_)) => {}
+        other => panic!("expected Transport error, got {other:?}"),
     }
 }

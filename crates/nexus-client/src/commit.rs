@@ -72,10 +72,18 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use reqwest::Method;
-use reqwest::header::HeaderMap;
 
-use crate::transport::{NexusRequest, NexusTransport, NexusTransportError};
+use crate::transport::{CapabilityCall, CapabilityCaller, NexusTransport, NexusTransportError};
+
+/// ADR-029 capability ids + target repo. `create_proposal` and
+/// `list_proposals` shared one path (`commit/v1/proposals`) historically, so
+/// both map to `commit.proposals`; the nexus fixture distinguishes them by
+/// payload (an `origin_reference`-carrying create body vs. a bare
+/// `consultant_id` list query). `request_proposal_action` is its own
+/// capability.
+const CAPABILITY_PROPOSALS: &str = "commit.proposals";
+const CAPABILITY_PROPOSAL_ACTIONS: &str = "commit.proposal_actions";
+const TARGET_REPO: &str = "cognitum-commit";
 
 /// Commit's proposal-workspace-handle projection
 /// (`anti-corruption-layers.md` §2). This repo never re-implements
@@ -127,8 +135,6 @@ struct RequestProposalActionCommand<'a> {
 pub enum CommitGatewayError {
     #[error(transparent)]
     Transport(#[from] NexusTransportError),
-    #[error("Commit returned a non-success status {status}")]
-    UnexpectedStatus { status: reqwest::StatusCode },
     #[error("Commit returned a response body that did not match the expected shape: {0}")]
     UnexpectedResponseShape(#[source] serde_json::Error),
 }
@@ -172,25 +178,28 @@ pub trait CommitGateway: Send + Sync {
 /// [`CommitGateway`] implementation backed by a [`NexusTransport`]. See the
 /// module docs for the required transport decoration per method.
 pub struct NexusCommitGateway {
-    transport: Arc<dyn NexusTransport>,
+    caller: CapabilityCaller,
 }
 
 impl NexusCommitGateway {
     /// See the module docs for the required transport decoration
     /// (read timeout + optional retry for `list_proposals`; write timeout,
-    /// never retried, for `create_proposal`/`request_proposal_action`).
+    /// never retried, for `create_proposal`/`request_proposal_action`). The
+    /// `transport` is wrapped in a [`CapabilityCaller`] so each method
+    /// issues the ADR-029 capability envelope.
     pub fn new(transport: Arc<dyn NexusTransport>) -> Self {
-        Self { transport }
+        Self { caller: CapabilityCaller::new(transport) }
     }
 
-    async fn post_command(&self, path: &str, body: serde_json::Value) -> Result<serde_json::Value, CommitGatewayError> {
-        let request = NexusRequest { method: Method::POST, path: path.to_string(), headers: HeaderMap::new(), body: Some(body) };
-        let response = self.transport.send(request).await?;
-
-        if !response.status.is_success() {
-            return Err(CommitGatewayError::UnexpectedStatus { status: response.status });
-        }
-        Ok(response.body)
+    async fn call(
+        &self,
+        capability_id: &str,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, CommitGatewayError> {
+        Ok(self
+            .caller
+            .call(CapabilityCall { capability_id: capability_id.to_owned(), target_repo: TARGET_REPO.to_owned(), payload })
+            .await?)
     }
 }
 
@@ -202,37 +211,22 @@ impl CommitGateway for NexusCommitGateway {
         consultant_id: &str,
     ) -> Result<ProposalSummary, CommitGatewayError> {
         let command = CreateProposalCommand { origin_reference, consultant_id };
-        let body =
-            self.post_command("commit/v1/proposals", serde_json::to_value(command).expect("command always serializes")).await?;
-        serde_json::from_value(body).map_err(CommitGatewayError::UnexpectedResponseShape)
+        let payload =
+            self.call(CAPABILITY_PROPOSALS, serde_json::to_value(command).expect("command always serializes")).await?;
+        serde_json::from_value(payload).map_err(CommitGatewayError::UnexpectedResponseShape)
     }
 
     async fn list_proposals(&self, consultant_id: &str) -> Result<Vec<ProposalSummary>, CommitGatewayError> {
-        let path = {
-            let mut query = url::form_urlencoded::Serializer::new(String::new());
-            query.append_pair("consultant_id", consultant_id);
-            format!("commit/v1/proposals?{}", query.finish())
-        };
-
-        let request = NexusRequest { method: Method::GET, path, headers: HeaderMap::new(), body: None };
-        let response = self.transport.send(request).await?;
-
-        if !response.status.is_success() {
-            return Err(CommitGatewayError::UnexpectedStatus { status: response.status });
-        }
+        let payload = self.call(CAPABILITY_PROPOSALS, serde_json::json!({ "consultant_id": consultant_id })).await?;
 
         let envelope: ProposalsEnvelope =
-            serde_json::from_value(response.body).map_err(CommitGatewayError::UnexpectedResponseShape)?;
+            serde_json::from_value(payload).map_err(CommitGatewayError::UnexpectedResponseShape)?;
         Ok(envelope.proposals)
     }
 
     async fn request_proposal_action(&self, proposal_id: &str, action: &str) -> Result<(), CommitGatewayError> {
         let command = RequestProposalActionCommand { proposal_id, action };
-        self.post_command(
-            "commit/v1/proposal-actions",
-            serde_json::to_value(command).expect("command always serializes"),
-        )
-        .await?;
+        self.call(CAPABILITY_PROPOSAL_ACTIONS, serde_json::to_value(command).expect("command always serializes")).await?;
         Ok(())
     }
 }

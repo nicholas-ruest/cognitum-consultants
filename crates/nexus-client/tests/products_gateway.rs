@@ -1,15 +1,16 @@
 //! Wiremock-backed tests for the Products ACL gateway (`ProductsGateway`,
-//! `NexusProductsGateway`) — PROMPT-39.
+//! `NexusProductsGateway`) — PROMPT-39, ADR-029.
 //!
-//! Mirrors `edu_gateway.rs`'s structure: a request-shape assertion for the
-//! one outbound call (no `consultant_id` this time — see `products.rs`'s
-//! module docs for why), several `ProductReferenceCard` fixture scenarios,
-//! and a malformed-response error-not-panic case.
+//! Post-ADR-029 every call is `POST capabilities/products.catalog` carrying
+//! a `CapabilityRequest` envelope; the gateway unwraps
+//! `CapabilityResponse.payload`, still expecting a `{"cards": [...]}` object.
+//! Filters, when present, travel in the payload (`{"filters": [...]}`) rather
+//! than as repeated query params.
 
 use std::sync::Arc;
 
 use nexus_client::{NexusProductsGateway, ProductsGateway, ProductsGatewayError};
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn gateway_for(mock_server: &MockServer) -> NexusProductsGateway {
@@ -18,12 +19,22 @@ fn gateway_for(mock_server: &MockServer) -> NexusProductsGateway {
     NexusProductsGateway::new(transport)
 }
 
+fn ok(payload: serde_json::Value) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "request_id": "req-test", "success": true, "payload": payload }))
+}
+
 #[tokio::test]
-async fn request_product_catalog_sends_no_query_params_and_parses_the_envelope() {
+async fn request_product_catalog_sends_an_empty_payload_and_parses_the_envelope() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/products/v1/catalog"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    Mock::given(method("POST"))
+        .and(path("/capabilities/products.catalog"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "products.catalog",
+            "target_repo": "cognitum-products",
+            "payload": {}
+        })))
+        .respond_with(ok(serde_json::json!({
             "cards": [
                 {
                     "product_id": "product-1",
@@ -55,16 +66,15 @@ async fn request_product_catalog_sends_no_query_params_and_parses_the_envelope()
 
     let received = mock_server.received_requests().await.expect("recording enabled");
     assert_eq!(received.len(), 1);
-    assert_eq!(received[0].url.query(), None, "no filters means no query string at all");
 }
 
 #[tokio::test]
-async fn request_product_catalog_sends_repeated_filter_query_params() {
+async fn request_product_catalog_sends_filters_in_the_payload() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/products/v1/catalog"))
-        .and(query_param("filter", "cloud"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "cards": [] })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/products.catalog"))
+        .and(body_partial_json(serde_json::json!({ "payload": { "filters": ["cloud"] } })))
+        .respond_with(ok(serde_json::json!({ "cards": [] })))
         .mount(&mock_server)
         .await;
 
@@ -78,9 +88,9 @@ async fn request_product_catalog_sends_repeated_filter_query_params() {
 #[tokio::test]
 async fn request_product_catalog_defaults_missing_demo_assets_to_an_empty_list() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/products/v1/catalog"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    Mock::given(method("POST"))
+        .and(path("/capabilities/products.catalog"))
+        .respond_with(ok(serde_json::json!({
             "cards": [
                 {
                     "product_id": "product-3",
@@ -103,9 +113,9 @@ async fn request_product_catalog_defaults_missing_demo_assets_to_an_empty_list()
 #[tokio::test]
 async fn request_product_catalog_handles_an_empty_result() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/products/v1/catalog"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "cards": [] })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/products.catalog"))
+        .respond_with(ok(serde_json::json!({ "cards": [] })))
         .mount(&mock_server)
         .await;
 
@@ -116,12 +126,13 @@ async fn request_product_catalog_handles_an_empty_result() {
 }
 
 #[tokio::test]
-async fn returns_gateway_error_not_panic_on_malformed_response() {
+async fn returns_gateway_error_not_panic_on_malformed_payload() {
     let mock_server = MockServer::start().await;
-    // A bare array instead of the expected `{"cards": [...]}` envelope.
-    Mock::given(method("GET"))
-        .and(path("/products/v1/catalog"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+    // Well-formed envelope, but its `payload` is a bare array instead of the
+    // expected `{"cards": [...]}` object.
+    Mock::given(method("POST"))
+        .and(path("/capabilities/products.catalog"))
+        .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
         .await;
 
@@ -135,10 +146,10 @@ async fn returns_gateway_error_not_panic_on_malformed_response() {
 }
 
 #[tokio::test]
-async fn returns_unexpected_status_error_on_non_success_response() {
+async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/products/v1/catalog"))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/products.catalog"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;
@@ -147,7 +158,7 @@ async fn returns_unexpected_status_error_on_non_success_response() {
     let result = gateway.request_product_catalog(None).await;
 
     match result {
-        Err(ProductsGatewayError::UnexpectedStatus { .. }) => {}
-        other => panic!("expected UnexpectedStatus error, got {other:?}"),
+        Err(ProductsGatewayError::Transport(_)) => {}
+        other => panic!("expected Transport error, got {other:?}"),
     }
 }

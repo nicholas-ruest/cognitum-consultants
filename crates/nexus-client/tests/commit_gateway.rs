@@ -1,17 +1,17 @@
 //! Wiremock-backed tests for the Commit ACL gateway (`CommitGateway`,
-//! `NexusCommitGateway`) — PROMPT-34.
+//! `NexusCommitGateway`) — PROMPT-34, ADR-029.
 //!
-//! Mirrors `sales_gateway.rs`'s structure: a request-body-shape assertion
-//! per outbound call, several `ProposalSummary` fixture scenarios (a draft,
-//! an in-review, and an accepted proposal — proving the gateway against more
-//! than one shape of `status`/`stage`), and a malformed-response
-//! error-not-panic case.
+//! Post-ADR-029 `create_proposal` and `list_proposals` are both
+//! `POST capabilities/commit.proposals` (distinguished by payload) and
+//! `request_proposal_action` is `POST capabilities/commit.proposal_actions`;
+//! each carries a `CapabilityRequest` envelope and the gateway unwraps
+//! `CapabilityResponse.payload`.
 
 use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
 use nexus_client::{CommitGateway, CommitGatewayError, NexusCommitGateway};
-use wiremock::matchers::{body_json, method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn gateway_for(mock_server: &MockServer) -> NexusCommitGateway {
@@ -20,16 +20,22 @@ fn gateway_for(mock_server: &MockServer) -> NexusCommitGateway {
     NexusCommitGateway::new(transport)
 }
 
+fn ok(payload: serde_json::Value) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "request_id": "req-test", "success": true, "payload": payload }))
+}
+
 #[tokio::test]
-async fn create_proposal_sends_correct_command_body_and_parses_a_draft_fixture() {
+async fn create_proposal_sends_correct_envelope_payload_and_parses_a_draft_fixture() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/commit/v1/proposals"))
-        .and(body_json(serde_json::json!({
-            "origin_reference": "acme-corp",
-            "consultant_id": "consultant-1"
+        .and(path("/capabilities/commit.proposals"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "commit.proposals",
+            "target_repo": "cognitum-commit",
+            "payload": { "origin_reference": "acme-corp", "consultant_id": "consultant-1" }
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        .respond_with(ok(serde_json::json!({
             "proposal_id": "proposal-1",
             "title": "Acme Corp Engagement Proposal",
             "status": "draft",
@@ -58,8 +64,8 @@ async fn create_proposal_sends_correct_command_body_and_parses_a_draft_fixture()
 async fn create_proposal_parses_a_fixture_with_no_deep_link() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/commit/v1/proposals"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        .and(path("/capabilities/commit.proposals"))
+        .respond_with(ok(serde_json::json!({
             "proposal_id": "proposal-2",
             "title": "Beta LLC Engagement Proposal",
             "status": "draft",
@@ -78,12 +84,12 @@ async fn create_proposal_parses_a_fixture_with_no_deep_link() {
 }
 
 #[tokio::test]
-async fn list_proposals_sends_consultant_id_as_a_query_param_and_parses_the_envelope() {
+async fn list_proposals_sends_consultant_id_in_the_payload_and_parses_the_envelope() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/commit/v1/proposals"))
-        .and(query_param("consultant_id", "consultant-1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    Mock::given(method("POST"))
+        .and(path("/capabilities/commit.proposals"))
+        .and(body_partial_json(serde_json::json!({ "payload": { "consultant_id": "consultant-1" } })))
+        .respond_with(ok(serde_json::json!({
             "proposals": [
                 {
                     "proposal_id": "proposal-1",
@@ -118,9 +124,9 @@ async fn list_proposals_sends_consultant_id_as_a_query_param_and_parses_the_enve
 #[tokio::test]
 async fn list_proposals_handles_an_empty_result() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/commit/v1/proposals"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "proposals": [] })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/commit.proposals"))
+        .respond_with(ok(serde_json::json!({ "proposals": [] })))
         .mount(&mock_server)
         .await;
 
@@ -131,15 +137,15 @@ async fn list_proposals_handles_an_empty_result() {
 }
 
 #[tokio::test]
-async fn request_proposal_action_sends_correct_command_body_and_handles_success() {
+async fn request_proposal_action_sends_correct_envelope_payload_and_handles_success() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/commit/v1/proposal-actions"))
-        .and(body_json(serde_json::json!({
-            "proposal_id": "proposal-1",
-            "action": "request_revision"
+        .and(path("/capabilities/commit.proposal_actions"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "commit.proposal_actions",
+            "payload": { "proposal_id": "proposal-1", "action": "request_revision" }
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"acknowledged": true})))
+        .respond_with(ok(serde_json::json!({"acknowledged": true})))
         .mount(&mock_server)
         .await;
 
@@ -152,15 +158,13 @@ async fn request_proposal_action_sends_correct_command_body_and_handles_success(
 }
 
 #[tokio::test]
-async fn returns_gateway_error_not_panic_on_malformed_create_proposal_response() {
+async fn returns_gateway_error_not_panic_on_malformed_create_proposal_payload() {
     let mock_server = MockServer::start().await;
-    // Missing required fields entirely (e.g. no `status`, no `stage`) — this
-    // must surface as an error, not a panic.
+    // Well-formed envelope, but its `payload` is missing required fields.
     Mock::given(method("POST"))
-        .and(path("/commit/v1/proposals"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "unexpected": "shape"
-        })))
+        .and(path("/capabilities/commit.proposals"))
+        .and(body_partial_json(serde_json::json!({ "payload": { "origin_reference": "acme-corp" } })))
+        .respond_with(ok(serde_json::json!({ "unexpected": "shape" })))
         .mount(&mock_server)
         .await;
 
@@ -174,12 +178,14 @@ async fn returns_gateway_error_not_panic_on_malformed_create_proposal_response()
 }
 
 #[tokio::test]
-async fn returns_gateway_error_not_panic_on_malformed_list_proposals_response() {
+async fn returns_gateway_error_not_panic_on_malformed_list_proposals_payload() {
     let mock_server = MockServer::start().await;
-    // A bare array instead of the expected `{"proposals": [...]}` envelope.
-    Mock::given(method("GET"))
-        .and(path("/commit/v1/proposals"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+    // Well-formed envelope, but its `payload` is a bare array instead of the
+    // expected `{"proposals": [...]}` object.
+    Mock::given(method("POST"))
+        .and(path("/capabilities/commit.proposals"))
+        .and(body_partial_json(serde_json::json!({ "payload": { "consultant_id": "consultant-1" } })))
+        .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
         .await;
 
@@ -193,10 +199,10 @@ async fn returns_gateway_error_not_panic_on_malformed_list_proposals_response() 
 }
 
 #[tokio::test]
-async fn returns_unexpected_status_error_on_non_success_response() {
+async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/commit/v1/proposal-actions"))
+        .and(path("/capabilities/commit.proposal_actions"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;
@@ -205,7 +211,7 @@ async fn returns_unexpected_status_error_on_non_success_response() {
     let result = gateway.request_proposal_action("proposal-1", "resend").await;
 
     match result {
-        Err(CommitGatewayError::UnexpectedStatus { .. }) => {}
-        other => panic!("expected UnexpectedStatus error, got {other:?}"),
+        Err(CommitGatewayError::Transport(_)) => {}
+        other => panic!("expected Transport error, got {other:?}"),
     }
 }

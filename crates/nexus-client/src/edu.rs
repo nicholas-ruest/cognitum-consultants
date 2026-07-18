@@ -51,10 +51,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use reqwest::Method;
-use reqwest::header::HeaderMap;
 
-use crate::transport::{NexusRequest, NexusTransport, NexusTransportError};
+use crate::transport::{CapabilityCall, CapabilityCaller, NexusTransport, NexusTransportError};
+
+/// ADR-029 capability id + target repo for this gateway's single call.
+const CAPABILITY_CATALOG: &str = "edu.catalog";
+const TARGET_REPO: &str = "cognitum-edu";
 
 /// Edu's read-mostly Learning Snapshot projection
 /// (`anti-corruption-layers.md` §3): one entry per course, carrying that
@@ -89,8 +91,6 @@ struct LearningCatalogEnvelope {
 pub enum EduGatewayError {
     #[error(transparent)]
     Transport(#[from] NexusTransportError),
-    #[error("Edu returned a non-success status {status}")]
-    UnexpectedStatus { status: reqwest::StatusCode },
     #[error("Edu returned a response body that did not match the expected shape: {0}")]
     UnexpectedResponseShape(#[source] serde_json::Error),
 }
@@ -120,15 +120,17 @@ pub trait EduGateway: Send + Sync {
 /// [`EduGateway`] implementation backed by a [`NexusTransport`]. See the
 /// module docs for the required transport decoration.
 pub struct NexusEduGateway {
-    transport: Arc<dyn NexusTransport>,
+    caller: CapabilityCaller,
 }
 
 impl NexusEduGateway {
     /// `transport` is expected to already be decorated per the ADR-016
     /// extended-read-call convention (see module docs) — this constructor
-    /// does not assemble timeout/retry/circuit-breaker layers itself.
+    /// does not assemble timeout/retry/circuit-breaker layers itself. It is
+    /// wrapped in a [`CapabilityCaller`] so this gateway issues the ADR-029
+    /// capability envelope.
     pub fn new(transport: Arc<dyn NexusTransport>) -> Self {
-        Self { transport }
+        Self { caller: CapabilityCaller::new(transport) }
     }
 }
 
@@ -139,24 +141,22 @@ impl EduGateway for NexusEduGateway {
         consultant_id: &str,
         filters: Option<&[String]>,
     ) -> Result<Vec<LearningSnapshot>, EduGatewayError> {
-        let path = {
-            let mut query = url::form_urlencoded::Serializer::new(String::new());
-            query.append_pair("consultant_id", consultant_id);
-            for filter in filters.unwrap_or_default() {
-                query.append_pair("filter", filter);
-            }
-            format!("edu/v1/catalog?{}", query.finish())
-        };
-
-        let request = NexusRequest { method: Method::GET, path, headers: HeaderMap::new(), body: None };
-        let response = self.transport.send(request).await?;
-
-        if !response.status.is_success() {
-            return Err(EduGatewayError::UnexpectedStatus { status: response.status });
+        let mut payload = serde_json::json!({ "consultant_id": consultant_id });
+        if let Some(filters) = filters.filter(|f| !f.is_empty()) {
+            payload["filters"] = serde_json::json!(filters);
         }
 
+        let response_payload = self
+            .caller
+            .call(CapabilityCall {
+                capability_id: CAPABILITY_CATALOG.to_owned(),
+                target_repo: TARGET_REPO.to_owned(),
+                payload,
+            })
+            .await?;
+
         let envelope: LearningCatalogEnvelope =
-            serde_json::from_value(response.body).map_err(EduGatewayError::UnexpectedResponseShape)?;
+            serde_json::from_value(response_payload).map_err(EduGatewayError::UnexpectedResponseShape)?;
         Ok(envelope.snapshots)
     }
 }

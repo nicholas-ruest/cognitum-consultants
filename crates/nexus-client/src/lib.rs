@@ -48,4 +48,7 @@ pub use sales::{AccountClaimResult, NexusSalesGateway, SalesGateway, SalesGatewa
 pub use timeout::{
     DEFAULT_EXTENDED_READ_TIMEOUT, DEFAULT_MAX_READ_TIMEOUT, DEFAULT_READ_TIMEOUT, DEFAULT_WRITE_TIMEOUT, TimeoutTransport,
 };
-pub use transport::{NexusRequest, NexusResponse, NexusTransport, NexusTransportError};
+pub use transport::{
+    Actor, CallerIdentity, CapabilityCall, CapabilityCaller, NexusRequest, NexusResponse, NexusTransport,
+    NexusTransportError,
+};

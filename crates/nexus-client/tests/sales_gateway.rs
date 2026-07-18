@@ -1,14 +1,16 @@
 //! Wiremock-backed tests for the Sales ACL gateway (`SalesGateway`,
-//! `NexusSalesGateway`) — PROMPT-24 / U24.
+//! `NexusSalesGateway`) — PROMPT-24 / U24, ADR-029.
 //!
-//! Fixture 1 replicates the worked example in `anti-corruption-layers.md`
-//! §1 exactly. Fixtures 2 and 3 cover other `match_status` values so the
-//! gateway is proven against more than one shape of verdict.
+//! Post-ADR-029 every call is a `POST capabilities/{id}` carrying a
+//! `CapabilityRequest` envelope; the gateway unwraps
+//! `CapabilityResponse.payload`. Fixture 1 replicates the worked example in
+//! `anti-corruption-layers.md` §1 exactly; the others cover other
+//! `match_status` values and the two command calls.
 
 use std::sync::Arc;
 
 use nexus_client::{NexusSalesGateway, SalesGateway, SalesGatewayError};
-use wiremock::matchers::{body_json, method, path};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn gateway_for(mock_server: &MockServer) -> NexusSalesGateway {
@@ -17,12 +19,17 @@ fn gateway_for(mock_server: &MockServer) -> NexusSalesGateway {
     NexusSalesGateway::new(transport)
 }
 
+fn ok(payload: serde_json::Value) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "request_id": "req-test", "success": true, "payload": payload }))
+}
+
 #[tokio::test]
 async fn parses_active_owned_account_worked_example() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/sales/v1/account-claims"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        .and(path("/capabilities/sales.account_claims"))
+        .respond_with(ok(serde_json::json!({
             "match_status": "active_owned_account",
             "creation_allowed": false,
             "display_message": "This company is already being worked.",
@@ -44,8 +51,8 @@ async fn parses_active_owned_account_worked_example() {
 async fn parses_available_claim_fixture() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/sales/v1/account-claims"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        .and(path("/capabilities/sales.account_claims"))
+        .respond_with(ok(serde_json::json!({
             "match_status": "available_claim",
             "creation_allowed": true,
             "display_message": "No existing owner found. You may create this lead.",
@@ -66,8 +73,8 @@ async fn parses_available_claim_fixture() {
 async fn parses_no_match_fixture() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/sales/v1/account-claims"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        .and(path("/capabilities/sales.account_claims"))
+        .respond_with(ok(serde_json::json!({
             "match_status": "no_match",
             "creation_allowed": true,
             "display_message": "No matching company found in Sales.",
@@ -85,15 +92,16 @@ async fn parses_no_match_fixture() {
 }
 
 #[tokio::test]
-async fn check_account_claim_sends_correct_command_body() {
+async fn check_account_claim_sends_correct_envelope_payload() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/sales/v1/account-claims"))
-        .and(body_json(serde_json::json!({
-            "company_name": "Acme Corp",
-            "consultant_id": "consultant-1"
+        .and(path("/capabilities/sales.account_claims"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "sales.account_claims",
+            "target_repo": "cognitum-sales",
+            "payload": { "company_name": "Acme Corp", "consultant_id": "consultant-1" }
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        .respond_with(ok(serde_json::json!({
             "match_status": "no_match",
             "creation_allowed": true,
             "display_message": "No matching company found in Sales.",
@@ -110,16 +118,19 @@ async fn check_account_claim_sends_correct_command_body() {
 }
 
 #[tokio::test]
-async fn request_collaboration_sends_correct_command_body_and_handles_success() {
+async fn request_collaboration_sends_correct_envelope_payload_and_handles_success() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/sales/v1/collaboration-requests"))
-        .and(body_json(serde_json::json!({
-            "company_reference": "company-42",
-            "consultant_id": "consultant-1",
-            "message": "I'd like to collaborate on this account."
+        .and(path("/capabilities/sales.collaboration_requests"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "sales.collaboration_requests",
+            "payload": {
+                "company_reference": "company-42",
+                "consultant_id": "consultant-1",
+                "message": "I'd like to collaborate on this account."
+            }
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"acknowledged": true})))
+        .respond_with(ok(serde_json::json!({"acknowledged": true})))
         .mount(&mock_server)
         .await;
 
@@ -134,16 +145,19 @@ async fn request_collaboration_sends_correct_command_body_and_handles_success() 
 }
 
 #[tokio::test]
-async fn submit_referral_sends_correct_command_body_and_handles_success() {
+async fn submit_referral_sends_correct_envelope_payload_and_handles_success() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/sales/v1/referrals"))
-        .and(body_json(serde_json::json!({
-            "company_reference": "company-99",
-            "consultant_id": "consultant-2",
-            "notes": "Referring to the EMEA team."
+        .and(path("/capabilities/sales.referrals"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "sales.referrals",
+            "payload": {
+                "company_reference": "company-99",
+                "consultant_id": "consultant-2",
+                "notes": "Referring to the EMEA team."
+            }
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"acknowledged": true})))
+        .respond_with(ok(serde_json::json!({"acknowledged": true})))
         .mount(&mock_server)
         .await;
 
@@ -156,15 +170,12 @@ async fn submit_referral_sends_correct_command_body_and_handles_success() {
 }
 
 #[tokio::test]
-async fn returns_gateway_error_not_panic_on_malformed_account_claim_response() {
+async fn returns_gateway_error_not_panic_on_malformed_account_claim_payload() {
     let mock_server = MockServer::start().await;
-    // Missing required fields entirely (e.g. no `creation_allowed`, no
-    // `permitted_actions`) — this must surface as an error, not a panic.
+    // Well-formed envelope, but its `payload` is missing required fields.
     Mock::given(method("POST"))
-        .and(path("/sales/v1/account-claims"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "unexpected": "shape"
-        })))
+        .and(path("/capabilities/sales.account_claims"))
+        .respond_with(ok(serde_json::json!({ "unexpected": "shape" })))
         .mount(&mock_server)
         .await;
 
@@ -174,5 +185,27 @@ async fn returns_gateway_error_not_panic_on_malformed_account_claim_response() {
     match result {
         Err(SalesGatewayError::UnexpectedResponseShape(_)) => {}
         other => panic!("expected UnexpectedResponseShape error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn returns_transport_error_when_capability_reports_failure() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/capabilities/sales.account_claims"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "request_id": "req-test",
+            "success": false,
+            "error": "sales rejected the claim check"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let gateway = gateway_for(&mock_server);
+    let result = gateway.check_account_claim("Acme Corp", "consultant-1").await;
+
+    match result {
+        Err(SalesGatewayError::Transport(_)) => {}
+        other => panic!("expected Transport error, got {other:?}"),
     }
 }
