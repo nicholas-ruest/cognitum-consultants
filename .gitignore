@@ -10,6 +10,8 @@ CLAUDE.local.md
 ruvector.db
 skills-lock.json
 .mcp.json
+agentdb.rvf
+agentdb.rvf.lock
 
 # Rust
 /target/
