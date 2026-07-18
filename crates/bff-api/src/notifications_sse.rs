@@ -245,6 +245,36 @@ mod tests {
         }
     }
 
+    /// Stub `CommitGateway`, same rationale as `UnusedSalesGateway` above
+    /// (PROMPT-34).
+    struct UnusedCommitGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::CommitGateway for UnusedCommitGateway {
+        async fn create_proposal(
+            &self,
+            _origin_reference: &str,
+            _consultant_id: &str,
+        ) -> Result<nexus_client::ProposalSummary, nexus_client::CommitGatewayError> {
+            unimplemented!("notifications_sse tests never call the commit gateway")
+        }
+
+        async fn list_proposals(
+            &self,
+            _consultant_id: &str,
+        ) -> Result<Vec<nexus_client::ProposalSummary>, nexus_client::CommitGatewayError> {
+            unimplemented!("notifications_sse tests never call the commit gateway")
+        }
+
+        async fn request_proposal_action(
+            &self,
+            _proposal_id: &str,
+            _action: &str,
+        ) -> Result<(), nexus_client::CommitGatewayError> {
+            unimplemented!("notifications_sse tests never call the commit gateway")
+        }
+    }
+
     fn dev_config() -> config::Config {
         config::Config {
             database_url: "postgres://localhost:5432/test".to_owned(),
@@ -282,6 +312,9 @@ mod tests {
             )),
             sales_query_gateway: Arc::new(UnusedSalesGateway),
             sales_command_gateway: Arc::new(UnusedSalesGateway),
+            commit_query_gateway: Arc::new(UnusedCommitGateway),
+            commit_command_gateway: Arc::new(UnusedCommitGateway),
+            workflow_session_repository: Arc::new(persistence::PgWorkflowSessionRepository::new(pool.clone())),
             notification_repository,
             action_queue_repository,
             event_bus,

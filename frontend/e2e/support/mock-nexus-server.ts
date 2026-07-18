@@ -18,14 +18,25 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * `http.createServer` covers with zero added dependencies.
  *
  * # Fixtures are fixed, not dynamically configurable
- * This server always grants the `"sales"` capability (for whichever
- * `consultant_id` is asked about) and always answers a company-claim check
- * with the `active_owned_account` fixture — `.plans/ddd/anti-corruption-
- * layers.md` §1's worked example, and the same fixture
- * `crates/bff-api/src/sales.rs`'s own integration tests use
- * (`active_owned_account_fixture()`). A future test that needs a different
- * `match_status` should extend this module with a configurable fixture
- * rather than hardcoding a second server.
+ * This server always grants the `"sales"` and `"commit"` capabilities (for
+ * whichever `consultant_id` is asked about) and always answers a
+ * company-claim check for most company names with the `active_owned_account`
+ * fixture — `.plans/ddd/anti-corruption-layers.md` §1's worked example, and
+ * the same fixture `crates/bff-api/src/sales.rs`'s own integration tests use
+ * (`active_owned_account_fixture()`).
+ *
+ * # One exception: the `no_match` fixture, by company name (PROMPT-34)
+ * `commit-sales-deeplink.spec.ts` needs a `creation_allowed: true` result to
+ * drive the Sales -> Commit deep link (`LeadConflictCheck.tsx`'s "Start
+ * Proposal in Commit" affordance only renders on that path). Rather than
+ * making the *whole* server's fixture selection dynamic (a bigger change
+ * than this one spec needs), a single company name —
+ * [`NO_MATCH_COMPANY_NAME`] — is carved out to answer with the `no_match`
+ * fixture instead; every other company name keeps answering with
+ * `active_owned_account` exactly as before, so `sales-lead-conflict.spec.ts`
+ * (which uses "Acme Corp") is unaffected. A future test that needs more than
+ * these two fixed scenarios should extend this module with a fully
+ * configurable fixture rather than adding more hardcoded exceptions.
  *
  * # Inspection, not shared JS state
  * Playwright test files run in a worker process separate from
@@ -59,10 +70,31 @@ const ACCOUNT_CLAIM_FIXTURE: AccountClaimResult = {
   permitted_actions: ['request_collaboration', 'submit_referral', 'cancel'],
 }
 
+/** The one company name (PROMPT-34) answered with the `no_match` fixture
+ * below instead of `ACCOUNT_CLAIM_FIXTURE` — see the module docs. */
+export const NO_MATCH_COMPANY_NAME = 'Nova Ventures'
+
+const NO_MATCH_ACCOUNT_CLAIM_FIXTURE: AccountClaimResult = {
+  match_status: 'no_match',
+  creation_allowed: true,
+  display_message: 'No matching company found in Sales.',
+  permitted_actions: [],
+}
+
 export interface RecordedCommand {
   path: string
   body: unknown
   receivedAt: string
+}
+
+/** `ProposalSummary` shape, mirrored from `crates/nexus-client/src/commit.rs`. */
+export interface ProposalSummary {
+  proposal_id: string
+  title: string
+  status: string
+  stage: string
+  last_updated_at: string
+  deep_link: string | null
 }
 
 /**
@@ -115,6 +147,12 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 export function startMockNexusServer(port: number): Promise<MockNexusServer> {
   const collaborationRequests: RecordedCommand[] = []
   const referrals: RecordedCommand[] = []
+  // PROMPT-34: proposals created via `POST /commit/v1/proposals`, keyed by
+  // `proposal_id`, so `GET /commit/v1/proposals` (list) and
+  // `POST /commit/v1/proposal-actions` can look them up.
+  const proposals = new Map<string, ProposalSummary>()
+  const proposalActions: RecordedCommand[] = []
+  let nextProposalNumber = 1
   // PROMPT-33 e2e: events queued via `POST /_test/enqueue-event` and
   // drained (returned once, then cleared) on the next `GET
   // events/v1/poll` — see `notifications-sse.spec.ts`. Draining, not
@@ -137,29 +175,29 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
     const url = new URL(request.url ?? '/', `http://127.0.0.1:${port}`)
     const method = request.method ?? 'GET'
 
-    // Armor ACL (ADR-009, PROMPT-14): grants the "sales" capability for
-    // whichever consultant_id is asked about, matching
+    // Armor ACL (ADR-009, PROMPT-14): grants the "sales" and "commit"
+    // capabilities for whichever consultant_id is asked about, matching
     // `crates/nexus-client/src/armor.rs`'s `{"assertions": [...]}` envelope.
     if (method === 'GET' && url.pathname === '/armor/v1/assertions') {
       const consultantId = url.searchParams.get('consultant_id') ?? 'unknown-consultant'
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
       sendJson(response, 200, {
         assertions: [
-          {
-            consultant_id: consultantId,
-            capability: 'sales',
-            scope: 'default',
-            expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-          },
+          { consultant_id: consultantId, capability: 'sales', scope: 'default', expires_at: expiresAt },
+          { consultant_id: consultantId, capability: 'commit', scope: 'default', expires_at: expiresAt },
         ],
       })
       return
     }
 
-    // Sales account-claim check (ADR-016, PROMPT-24): always answers with
-    // the active_owned_account worked example.
+    // Sales account-claim check (ADR-016, PROMPT-24): answers with the
+    // no_match fixture for `NO_MATCH_COMPANY_NAME`, and the
+    // active_owned_account worked example for every other company name —
+    // see the module docs.
     if (method === 'POST' && url.pathname === '/sales/v1/account-claims') {
-      await readJsonBody(request)
-      sendJson(response, 200, ACCOUNT_CLAIM_FIXTURE)
+      const body = (await readJsonBody(request)) as { company_name?: string }
+      const fixture = body.company_name === NO_MATCH_COMPANY_NAME ? NO_MATCH_ACCOUNT_CLAIM_FIXTURE : ACCOUNT_CLAIM_FIXTURE
+      sendJson(response, 200, fixture)
       return
     }
 
@@ -173,6 +211,41 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
     if (method === 'POST' && url.pathname === '/sales/v1/referrals') {
       const body = await readJsonBody(request)
       referrals.push({ path: url.pathname, body, receivedAt: new Date().toISOString() })
+      sendJson(response, 200, {})
+      return
+    }
+
+    // Commit proposal creation (ADR-016, PROMPT-34): creates and stores a
+    // `ProposalSummary` keyed by a freshly minted `proposal_id`, matching
+    // `crates/nexus-client/src/commit.rs`'s `CreateProposalCommand`/
+    // `ProposalSummary` shapes.
+    if (method === 'POST' && url.pathname === '/commit/v1/proposals') {
+      const body = (await readJsonBody(request)) as { origin_reference: string; consultant_id: string }
+      const proposalId = `proposal-${nextProposalNumber}`
+      nextProposalNumber += 1
+      const proposal: ProposalSummary = {
+        proposal_id: proposalId,
+        title: `${body.origin_reference} Engagement Proposal`,
+        status: 'draft',
+        stage: 'drafting',
+        last_updated_at: new Date().toISOString(),
+        deep_link: `https://commit.cognitum.one/proposals/${proposalId}`,
+      }
+      proposals.set(proposalId, proposal)
+      sendJson(response, 200, proposal)
+      return
+    }
+
+    // Commit proposal list (PROMPT-34): `{"proposals": [...]}` envelope,
+    // matching `crates/nexus-client/src/commit.rs`'s `ProposalsEnvelope`.
+    if (method === 'GET' && url.pathname === '/commit/v1/proposals') {
+      sendJson(response, 200, { proposals: [...proposals.values()] })
+      return
+    }
+
+    if (method === 'POST' && url.pathname === '/commit/v1/proposal-actions') {
+      const body = await readJsonBody(request)
+      proposalActions.push({ path: url.pathname, body, receivedAt: new Date().toISOString() })
       sendJson(response, 200, {})
       return
     }
@@ -201,6 +274,16 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    if (method === 'GET' && url.pathname === '/_test/proposals') {
+      sendJson(response, 200, [...proposals.values()])
+      return
+    }
+
+    if (method === 'GET' && url.pathname === '/_test/proposal-actions') {
+      sendJson(response, 200, proposalActions)
+      return
+    }
+
     // Test-injection route (PROMPT-33): queues one `CapabilityEventReceived`
     // for the *next* `GET events/v1/poll` to pick up — how
     // `notifications-sse.spec.ts` drives a real Nexus->ingestion->NOTIFY/
@@ -216,6 +299,8 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       collaborationRequests.length = 0
       referrals.length = 0
       queuedEvents = []
+      proposals.clear()
+      proposalActions.length = 0
       sendJson(response, 200, {})
       return
     }

@@ -285,6 +285,36 @@ mod tests {
         }
     }
 
+    /// Stub `CommitGateway` for dashboard tests, same rationale as
+    /// `UnusedSalesGateway` above (PROMPT-34).
+    struct UnusedCommitGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::CommitGateway for UnusedCommitGateway {
+        async fn create_proposal(
+            &self,
+            _origin_reference: &str,
+            _consultant_id: &str,
+        ) -> Result<nexus_client::ProposalSummary, nexus_client::CommitGatewayError> {
+            unimplemented!("dashboard tests never call the commit gateway")
+        }
+
+        async fn list_proposals(
+            &self,
+            _consultant_id: &str,
+        ) -> Result<Vec<nexus_client::ProposalSummary>, nexus_client::CommitGatewayError> {
+            unimplemented!("dashboard tests never call the commit gateway")
+        }
+
+        async fn request_proposal_action(
+            &self,
+            _proposal_id: &str,
+            _action: &str,
+        ) -> Result<(), nexus_client::CommitGatewayError> {
+            unimplemented!("dashboard tests never call the commit gateway")
+        }
+    }
+
     async fn migrated_pool() -> (persistence::Pool, testcontainers_modules::testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.expect("failed to start postgres container");
         let host = container.get_host().await.expect("failed to resolve container host");
@@ -331,6 +361,8 @@ mod tests {
             Arc::new(persistence::PgNotificationRepository::new(pool.clone()));
         let action_queue_repository: Arc<dyn bff_core::ActionQueueRepository> =
             Arc::new(persistence::PgActionQueueRepository::new(pool.clone()));
+        let workflow_session_repository: Arc<dyn bff_core::WorkflowSessionRepository> =
+            Arc::new(persistence::PgWorkflowSessionRepository::new(pool.clone()));
 
         let state = AppState {
             db_pool: pool,
@@ -342,6 +374,9 @@ mod tests {
             dashboard_repository,
             sales_query_gateway: Arc::new(UnusedSalesGateway),
             sales_command_gateway: Arc::new(UnusedSalesGateway),
+            commit_query_gateway: Arc::new(UnusedCommitGateway),
+            commit_command_gateway: Arc::new(UnusedCommitGateway),
+            workflow_session_repository,
             notification_repository,
             action_queue_repository,
             event_bus: Arc::new(bff_core::EventBus::default()),

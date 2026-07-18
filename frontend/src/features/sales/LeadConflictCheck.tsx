@@ -61,6 +61,35 @@ function submitReferral(companyReference: string): Promise<unknown> {
 }
 
 /**
+ * PROMPT-34: Sales -> Commit deep link. `POST /api/workflow-sessions`
+ * response shape, mirrored from `crates/bff-api/src/workflow_sessions.rs`'s
+ * `WorkflowSessionResponse`.
+ */
+interface WorkflowSessionResponse {
+  session_id: string
+  status: string
+  expires_at: string
+}
+
+/**
+ * Starts a `CrossCapabilityWorkflowSession` (`origin_capability: "sales"`,
+ * `target_capability: "commit"`) hand-off. This is deliberately **not**
+ * part of Sales' own `permitted_actions` vocabulary (`AccountClaimResult`
+ * carries no such action id) — it's this module's own added affordance for
+ * the "no conflict, consider starting a proposal" moment, per
+ * `docs/SALES_FLOW_PATTERN.md` §4 / PROMPT-34's acceptance criteria. See
+ * `frontend/src/features/commit/ProposalWorkspace.tsx` for the other half
+ * of the hand-off (consuming the resulting `?workflow_session_id=...`).
+ */
+function startWorkflowSessionToCommit(companyReference: string): Promise<WorkflowSessionResponse> {
+  return postJson<WorkflowSessionResponse>('/api/workflow-sessions', {
+    origin_capability: 'sales',
+    origin_reference: companyReference,
+    target_capability: 'commit',
+  })
+}
+
+/**
  * `creation_allowed` -> `Alert` variant mapping (the prompt leaves the
  * exact variant to this unit's judgment):
  * - `false` -> `warning`: a conflict exists and the consultant must choose
@@ -101,6 +130,17 @@ export function LeadConflictCheck() {
   const checkMutation = useMutation({ mutationFn: checkLeadConflict })
   const collaborationMutation = useMutation({ mutationFn: requestCollaboration })
   const referralMutation = useMutation({ mutationFn: submitReferral })
+  // PROMPT-34 deep link: on success, navigate to the dashboard with the new
+  // session's id as a query param — `ProposalWorkspace.tsx` consumes it and
+  // fires the actual `create_proposal` call. A full navigation (not a
+  // client-side router push, since this app has none — see `App.tsx`'s
+  // doc comment) is safe here: the session cookie persists across it.
+  const startProposalMutation = useMutation({
+    mutationFn: startWorkflowSessionToCommit,
+    onSuccess: (workflowSession) => {
+      window.location.assign(`/?workflow_session_id=${encodeURIComponent(workflowSession.session_id)}`)
+    },
+  })
 
   // The reference used for follow-up commands must match the company the
   // rendered result actually pertains to, not whatever is currently typed
@@ -161,6 +201,28 @@ export function LeadConflictCheck() {
                   referralMutation={referralMutation}
                 />
               ))}
+            </div>
+          ) : null}
+
+          {/* PROMPT-34 Sales -> Commit deep link: rendered on the
+              `creation_allowed: true` success path, since that's when
+              starting a *new* proposal makes sense — not on the
+              already-owned conflict path, where `permitted_actions`
+              (request_collaboration/submit_referral/cancel) already covers
+              what the consultant can do. Not part of `permitted_actions` —
+              see `startWorkflowSessionToCommit`'s doc comment. */}
+          {result.creation_allowed ? (
+            <div>
+              <Button
+                variant="secondary"
+                disabled={startProposalMutation.isPending}
+                onClick={() => startProposalMutation.mutate(companyReference)}
+              >
+                {startProposalMutation.isPending ? 'Starting…' : 'Start Proposal in Commit'}
+              </Button>
+              {startProposalMutation.isError ? (
+                <p className="mt-1 text-sm text-red-600">Failed to start a proposal. Please try again.</p>
+              ) : null}
             </div>
           ) : null}
         </div>

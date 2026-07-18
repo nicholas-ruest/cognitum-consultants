@@ -77,7 +77,7 @@ describe('LeadConflictCheck', () => {
     expect(screen.getAllByRole('button')).toHaveLength(4)
   })
 
-  it('renders no action buttons when permitted_actions is empty', async () => {
+  it('renders no permitted_actions buttons, but does render the Start Proposal deep-link button, when permitted_actions is empty and creation_allowed is true', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -99,8 +99,84 @@ describe('LeadConflictCheck', () => {
       expect(screen.getByText('No existing owner found — you may proceed.')).toBeInTheDocument()
     })
 
-    // Only the form's submit button remains — no action buttons rendered.
-    expect(screen.getAllByRole('button')).toHaveLength(1)
+    // No request_collaboration/submit_referral/cancel buttons (empty
+    // permitted_actions), but the PROMPT-34 deep-link affordance is its own
+    // thing, gated on `creation_allowed` — the submit button plus this one.
+    expect(screen.getByRole('button', { name: 'Start Proposal in Commit' })).toBeInTheDocument()
+    expect(screen.getAllByRole('button')).toHaveLength(2)
+  })
+
+  it('does not render the Start Proposal deep-link button when creation_allowed is false', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ACTIVE_OWNED_ACCOUNT_RESPONSE }),
+    )
+
+    renderWithProviders(<LeadConflictCheck />)
+    submitCompanyName('Acme Corp')
+
+    await waitFor(() => {
+      expect(screen.getByText('This company is already being worked.')).toBeInTheDocument()
+    })
+
+    expect(screen.queryByRole('button', { name: 'Start Proposal in Commit' })).not.toBeInTheDocument()
+  })
+
+  it('clicking "Start Proposal in Commit" starts a workflow session and navigates with its id', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+
+      if (url === '/api/sales/lead-conflict-check') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            match_status: 'no_match',
+            creation_allowed: true,
+            display_message: 'No matching company found in Sales.',
+            permitted_actions: [],
+          }),
+        }
+      }
+      if (url === '/api/workflow-sessions') {
+        const body = JSON.parse(String(init?.body)) as {
+          origin_capability: string
+          origin_reference: string
+          target_capability: string
+        }
+        expect(body).toEqual({
+          origin_capability: 'sales',
+          origin_reference: 'Nova Ventures',
+          target_capability: 'commit',
+        })
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ session_id: 'session-123', status: 'started', expires_at: '2026-01-01T00:30:00Z' }),
+        }
+      }
+      throw new Error(`unexpected fetch call: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    // jsdom's `window.location.assign` is non-configurable (spying on it
+    // directly throws), so the whole `location` object is stubbed instead
+    // — `vi.unstubAllGlobals()` in `afterEach` restores it, same mechanism
+    // this file already uses for `fetch`.
+    const assignSpy = vi.fn()
+    vi.stubGlobal('location', { ...window.location, assign: assignSpy })
+
+    renderWithProviders(<LeadConflictCheck />)
+    submitCompanyName('Nova Ventures')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Start Proposal in Commit' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start Proposal in Commit' }))
+
+    await waitFor(() => {
+      expect(assignSpy).toHaveBeenCalledWith('/?workflow_session_id=session-123')
+    })
   })
 
   it('renders an unrecognized action id generically instead of crashing', async () => {

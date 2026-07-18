@@ -43,6 +43,14 @@ function mockFetch(cards: MockCard[]) {
       return { ok: true, status: 200, json: async () => [] }
     }
 
+    // PROMPT-34: the "commit" card now hosts the real `ProposalWorkspace`
+    // feature module, which fires its own `GET` on mount — stubbed empty
+    // here for the same "not what this suite is about" reason as above
+    // (covered by `ProposalWorkspace.test.tsx`).
+    if (url === '/api/commit/proposals') {
+      return { ok: true, status: 200, json: async () => [] }
+    }
+
     throw new Error(`unexpected fetch call: ${url}`)
   })
 }
@@ -86,11 +94,15 @@ describe('DashboardPage', () => {
       expect(screen.getByRole('heading', { name: 'Commit' })).toBeInTheDocument()
     })
 
-    // PROMPT-26: the "sales" card now hosts the real `LeadConflictCheck`
-    // feature module, not the placeholder — only the remaining
-    // (non-sales) card still renders it.
-    expect(screen.getAllByText('no live data yet')).toHaveLength(1)
+    // PROMPT-26/34: the "sales" card hosts the real `LeadConflictCheck`
+    // feature module and the "commit" card hosts the real
+    // `ProposalWorkspace` feature module, not the placeholder — no card in
+    // this fixture is left rendering it.
+    expect(screen.queryByText('no live data yet')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Company Name')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByLabelText('Origin Reference')).toBeInTheDocument()
+    })
   })
 
   it('renders zero cards when the dashboard has none', async () => {

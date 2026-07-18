@@ -101,15 +101,41 @@ pub enum EventClassification {
 /// others use the `PascalCase` event names from `../ddd/domain-events.md`).
 ///
 /// **This list is expected to grow.** It is intentionally small and
-/// explicit today (Sales is the only integrated capability, PROMPT-24/25);
-/// each subsequent capability integrated in Phase 4 that has action-implying
-/// events should add its normalized `event_type`(s) here. Unknown/future
-/// `event_type`s are never silently dropped — [`classify`] defaults them to
-/// [`EventClassification::Notification`], the conservative choice: an
-/// unrecognized event still reaches the consultant as an informational
-/// item, rather than being lost or (worse) incorrectly treated as
-/// actionable when this repo doesn't yet know what action it implies.
-const ACTION_EVENT_TYPES: &[&str] = &["task_assigned", "collaboration_request_acknowledged"];
+/// explicit today; each subsequent capability integrated in Phase 4 that has
+/// action-implying events should add its normalized `event_type`(s) here.
+/// Unknown/future `event_type`s are never silently dropped — [`classify`]
+/// defaults them to [`EventClassification::Notification`], the conservative
+/// choice: an unrecognized event still reaches the consultant as an
+/// informational item, rather than being lost or (worse) incorrectly
+/// treated as actionable when this repo doesn't yet know what action it
+/// implies.
+///
+/// # PROMPT-34 (Commit ACL) additions: `proposal_accepted` only
+/// Commit's three inbound events (`anti-corruption-layers.md` §2:
+/// `ProposalCreated`, `ProposalStatusChanged`, `ProposalAccepted`) were
+/// each individually judged against "does this imply the consultant must
+/// now go *do* something, beyond just being told":
+/// - `ProposalCreated` -> **notification**. It fires right after this
+///   repo's own `POST /api/commit/proposals` call already succeeded
+///   (`crate::commit`) — the consultant is already looking at the new
+///   proposal by the time this event would arrive; it's a confirmation
+///   echo, not a prompt to act.
+/// - `ProposalStatusChanged` -> **notification**. A generic status
+///   transition (e.g. `draft -> internal_review`) is informational by
+///   nature — there is no single action this repo could name generically
+///   for "a proposal's status changed" the way `task_assigned` names one
+///   concrete action ("go look at your new task"). Narrower, more specific
+///   status-change events can be split out and reclassified individually
+///   later if a specific one turns out to need it.
+/// - `ProposalAccepted` -> **action** (added to this list). Unlike a
+///   generic status change, an accepted proposal is the one Commit status
+///   transition that concretely implies the consultant has real follow-up
+///   work waiting (e.g. kicking off the engagement, coordinating next
+///   steps with the client) — the same "acknowledgment implies a required
+///   response" reasoning `collaboration_request_acknowledged` was already
+///   added under, not a generic informational update.
+const ACTION_EVENT_TYPES: &[&str] =
+    &["task_assigned", "collaboration_request_acknowledged", "proposal_accepted"];
 
 /// Normalizes an `event_type` for matching against [`ACTION_EVENT_TYPES`]:
 /// lowercases and strips non-alphanumeric separators, so `"task_assigned"`,
@@ -773,6 +799,61 @@ mod tests {
         let actions = action_repo.rows.lock().unwrap();
         assert_eq!(actions.len(), 1, "CollaborationRequestAcknowledged implies a required action");
         assert!(actions.contains_key(&("sales".to_string(), "cra-1".to_string())));
+    }
+
+    // --- Commit events as real concrete test cases (PROMPT-34) -----------
+
+    /// `ProposalCreated`/`ProposalStatusChanged` (informational) and
+    /// `ProposalAccepted` (action-implying, per `ACTION_EVENT_TYPES`'s
+    /// PROMPT-34 doc comment) — used as the real Commit events PROMPT-34
+    /// asks to be classified against, matching `sales_events_are_classified_
+    /// and_ingested_as_documented`'s shape for Sales above.
+    #[tokio::test]
+    async fn commit_events_are_classified_and_ingested_as_documented() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+        let bus = EventBus::new(16);
+
+        let mut proposal_created = event("pc-1", "proposal_created");
+        proposal_created.origin_capability = "commit".to_string();
+        let mut proposal_status_changed = event("psc-1", "proposal_status_changed");
+        proposal_status_changed.origin_capability = "commit".to_string();
+        let mut proposal_accepted = event("pa-1", "proposal_accepted");
+        proposal_accepted.origin_capability = "commit".to_string();
+
+        let result = ingest_events(
+            vec![proposal_created.clone(), proposal_status_changed.clone(), proposal_accepted.clone()],
+            &notification_repo,
+            &action_repo,
+            &bus,
+        )
+        .await;
+
+        assert_eq!(result.inserted(), 3);
+        assert_eq!(result.rejected(), 0);
+
+        let notifications = notification_repo.rows.lock().unwrap();
+        assert_eq!(notifications.len(), 2, "ProposalCreated and ProposalStatusChanged are informational");
+        assert!(notifications.contains_key(&("commit".to_string(), "pc-1".to_string())));
+        assert!(notifications.contains_key(&("commit".to_string(), "psc-1".to_string())));
+
+        let actions = action_repo.rows.lock().unwrap();
+        assert_eq!(actions.len(), 1, "ProposalAccepted implies required follow-up work");
+        assert!(actions.contains_key(&("commit".to_string(), "pa-1".to_string())));
+    }
+
+    #[test]
+    fn classify_matches_proposal_accepted_regardless_of_casing() {
+        assert_eq!(classify("proposal_accepted"), EventClassification::Action);
+        assert_eq!(classify("ProposalAccepted"), EventClassification::Action);
+    }
+
+    #[test]
+    fn classify_routes_proposal_created_and_status_changed_to_notification() {
+        assert_eq!(classify("proposal_created"), EventClassification::Notification);
+        assert_eq!(classify("ProposalCreated"), EventClassification::Notification);
+        assert_eq!(classify("proposal_status_changed"), EventClassification::Notification);
+        assert_eq!(classify("ProposalStatusChanged"), EventClassification::Notification);
     }
 
     // --- construction -----------------------------------------------------

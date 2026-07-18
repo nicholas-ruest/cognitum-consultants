@@ -1,3 +1,4 @@
+mod commit;
 mod correlation;
 mod dashboard;
 mod event_ingestion;
@@ -10,6 +11,7 @@ mod permissions;
 mod sales;
 mod session;
 mod telemetry;
+mod workflow_sessions;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -106,6 +108,35 @@ async fn main() {
     let sales_command_gateway: Arc<dyn nexus_client::SalesGateway> =
         Arc::new(nexus_client::NexusSalesGateway::new(sales_command_transport));
 
+    // Commit ACL gateway (ADR-016, PROMPT-34): same shared-base-transport,
+    // two-instances split as Sales above — see `commit`/`nexus_client::commit`
+    // module docs for the full decision writeup. `list_proposals` gets the
+    // read timeout + retry (idempotent, page-load-ish); `create_proposal`/
+    // `request_proposal_action` get the write timeout, no retry
+    // (non-idempotent commands).
+    let commit_base_transport = nexus_client::ReqwestNexusTransport::new(&cfg.nexus_endpoint_url)
+        .unwrap_or_else(|err| panic!("invalid nexus_endpoint_url {:?}: {err}", cfg.nexus_endpoint_url));
+    let commit_base_transport: Arc<dyn nexus_client::NexusTransport> = Arc::new(commit_base_transport);
+
+    let commit_query_timeout_transport =
+        Arc::new(nexus_client::TimeoutTransport::new(commit_base_transport.clone(), nexus_client::DEFAULT_READ_TIMEOUT));
+    let commit_query_transport: Arc<dyn nexus_client::NexusTransport> =
+        Arc::new(nexus_client::RetryingTransport::with_default_retries(commit_query_timeout_transport));
+    let commit_query_gateway: Arc<dyn nexus_client::CommitGateway> =
+        Arc::new(nexus_client::NexusCommitGateway::new(commit_query_transport));
+
+    let commit_command_transport: Arc<dyn nexus_client::NexusTransport> =
+        Arc::new(nexus_client::TimeoutTransport::new(commit_base_transport, nexus_client::DEFAULT_WRITE_TIMEOUT));
+    let commit_command_gateway: Arc<dyn nexus_client::CommitGateway> =
+        Arc::new(nexus_client::NexusCommitGateway::new(commit_command_transport));
+
+    // PROMPT-22/34, ADR-010: the Postgres-backed `CrossCapabilityWorkflowSession`
+    // repository — PROMPT-22 built this, but no BFF route consumed it until
+    // this unit (`workflow_sessions::workflow_sessions_router`,
+    // `commit::create_proposal`'s hand-off lookup).
+    let workflow_session_repository: Arc<dyn bff_core::WorkflowSessionRepository> =
+        Arc::new(persistence::PgWorkflowSessionRepository::new(db_pool.clone()));
+
     // PROMPT-29/30, ADR-010: the Postgres-backed `NotificationItem`/
     // `ActionQueueEntry` repositories, and the in-process `EventBus`
     // PROMPT-31's SSE endpoint subscribes to. Constructed here (not inside
@@ -187,6 +218,9 @@ async fn main() {
         dashboard_repository,
         sales_query_gateway,
         sales_command_gateway,
+        commit_query_gateway,
+        commit_command_gateway,
+        workflow_session_repository,
         notification_repository,
         action_queue_repository,
         event_bus,
@@ -219,6 +253,8 @@ async fn main() {
         .merge(permissions::diagnostic_router(state.clone()))
         .merge(dashboard::dashboard_router(state.clone()))
         .merge(sales::sales_router(state.clone()))
+        .merge(commit::commit_router(state.clone()))
+        .merge(workflow_sessions::workflow_sessions_router(state.clone()))
         .merge(notifications_sse::notifications_router(state.clone()))
         .merge(notifications::notifications_write_router(state.clone()));
 

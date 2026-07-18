@@ -91,6 +91,29 @@ pub struct AppState {
     /// [`nexus_client::SalesGateway`] trait — see `crate::sales` module
     /// docs.
     pub sales_command_gateway: Arc<dyn nexus_client::SalesGateway>,
+    /// Commit ACL gateway (ADR-016, PROMPT-34) used for
+    /// `CommitGateway::list_proposals` — the idempotent-read call. Mirrors
+    /// [`Self::sales_query_gateway`]'s split rationale exactly: see
+    /// `crate::commit`/`nexus_client::commit` module docs for why this is a
+    /// *separate* `NexusCommitGateway` instance from
+    /// [`Self::commit_command_gateway`] rather than one shared field.
+    pub commit_query_gateway: Arc<dyn nexus_client::CommitGateway>,
+    /// Commit ACL gateway (ADR-016, PROMPT-34) used for
+    /// `CommitGateway::create_proposal` / `CommitGateway::request_proposal_action`
+    /// — non-idempotent side-effecting commands that must never be
+    /// auto-retried. Deliberately a different gateway *instance* than
+    /// [`Self::commit_query_gateway`] even though both implement the same
+    /// [`nexus_client::CommitGateway`] trait — see `crate::commit` module
+    /// docs.
+    pub commit_command_gateway: Arc<dyn nexus_client::CommitGateway>,
+    /// Repository for [`bff_core::CrossCapabilityWorkflowSession`]
+    /// (PROMPT-22/34, ADR-010). PROMPT-22 only built the aggregate +
+    /// repository; PROMPT-34 is the first real BFF consumer
+    /// (`crate::workflow_sessions`'s `POST /api/workflow-sessions`, and
+    /// `crate::commit::create_proposal`'s `origin_workflow_session_id`
+    /// hand-off lookup). `Arc<dyn ...>`, matching every other repository
+    /// field's convention.
+    pub workflow_session_repository: Arc<dyn bff_core::WorkflowSessionRepository>,
     /// Repository for [`bff_core::NotificationItem`] (PROMPT-29/30,
     /// ADR-010). Not yet read by any handler ([`crate::event_ingestion`]'s
     /// polling loop is the only current writer, via `main`'s spawned
