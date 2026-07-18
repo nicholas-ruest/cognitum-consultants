@@ -29,6 +29,22 @@ pub async fn handler(State(handle): State<PrometheusHandle>) -> String {
     handle.render()
 }
 
+/// Shared handle for router-level tests (`dashboard`, `sales`, ...).
+///
+/// `install_recorder` installs a *process-global* recorder and panics if
+/// called twice. This binary's test harness runs every `#[cfg(test)]`
+/// module's tests in one process, so every test module that needs an
+/// `AppState`-shaped `PrometheusHandle` must share this single lazily-
+/// installed instance rather than each maintaining its own `OnceLock` (two
+/// independent `OnceLock`s would each still call `install_recorder` once,
+/// the second of which panics).
+#[cfg(test)]
+pub fn shared_test_handle() -> PrometheusHandle {
+    use std::sync::OnceLock;
+    static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
+    HANDLE.get_or_init(install_recorder).clone()
+}
+
 /// Middleware recording per-route request count and latency, keyed by
 /// method, route template (via [`MatchedPath`], not the raw concrete path,
 /// to avoid unbounded label cardinality once path params exist), and status.

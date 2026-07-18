@@ -2,6 +2,7 @@ mod correlation;
 mod dashboard;
 mod metrics;
 mod permissions;
+mod sales;
 mod session;
 mod telemetry;
 
@@ -80,6 +81,29 @@ async fn main() {
     let dashboard_repository: Arc<dyn bff_core::DashboardConfigurationRepository> =
         Arc::new(persistence::PgDashboardConfigurationRepository::new(db_pool.clone()));
 
+    // Sales ACL gateway (ADR-016, PROMPT-24/25): one shared base transport,
+    // decorated into *two* separate `NexusSalesGateway` instances — one
+    // per differing retry-safety profile. See `sales` module docs for the
+    // full decision writeup: `check_account_claim` is a retry-safe,
+    // user-blocking read (write-timeout budget + `RetryingTransport`);
+    // `request_collaboration`/`submit_referral` are non-idempotent
+    // commands (write-timeout budget, no retry wrapper).
+    let sales_base_transport = nexus_client::ReqwestNexusTransport::new(&cfg.nexus_endpoint_url)
+        .unwrap_or_else(|err| panic!("invalid nexus_endpoint_url {:?}: {err}", cfg.nexus_endpoint_url));
+    let sales_base_transport: Arc<dyn nexus_client::NexusTransport> = Arc::new(sales_base_transport);
+
+    let sales_query_timeout_transport =
+        Arc::new(nexus_client::TimeoutTransport::new(sales_base_transport.clone(), nexus_client::DEFAULT_WRITE_TIMEOUT));
+    let sales_query_transport: Arc<dyn nexus_client::NexusTransport> =
+        Arc::new(nexus_client::RetryingTransport::with_default_retries(sales_query_timeout_transport));
+    let sales_query_gateway: Arc<dyn nexus_client::SalesGateway> =
+        Arc::new(nexus_client::NexusSalesGateway::new(sales_query_transport));
+
+    let sales_command_transport: Arc<dyn nexus_client::NexusTransport> =
+        Arc::new(nexus_client::TimeoutTransport::new(sales_base_transport, nexus_client::DEFAULT_WRITE_TIMEOUT));
+    let sales_command_gateway: Arc<dyn nexus_client::SalesGateway> =
+        Arc::new(nexus_client::NexusSalesGateway::new(sales_command_transport));
+
     let state = AppState {
         db_pool,
         session_provider,
@@ -92,6 +116,8 @@ async fn main() {
         prometheus_handle,
         permission_cache,
         dashboard_repository,
+        sales_query_gateway,
+        sales_command_gateway,
     };
 
     // `/api/login/dev` is dev-only in practice (see `session` module docs)
@@ -101,12 +127,14 @@ async fn main() {
     // adds one more, temporary, protected route (see its doc comment) that
     // proves the ADR-009 `is_permitted` + `403` short-circuit mechanism.
     // `dashboard::dashboard_router` adds the real `GET`/`PUT /api/dashboard`
-    // routes (PROMPT-23).
+    // routes (PROMPT-23). `sales::sales_router` adds the real
+    // `POST /api/sales/*` routes (PROMPT-25).
     let api_router = Router::new()
         .route("/login/dev", post(session::login_dev))
         .merge(session::protected_router(state.clone()))
         .merge(permissions::diagnostic_router(state.clone()))
-        .merge(dashboard::dashboard_router(state.clone()));
+        .merge(dashboard::dashboard_router(state.clone()))
+        .merge(sales::sales_router(state.clone()));
 
     let app = Router::new()
         .route("/healthz", get(healthz))

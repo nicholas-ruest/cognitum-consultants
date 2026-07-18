@@ -203,7 +203,7 @@ pub fn dashboard_router(state: AppState) -> Router<AppState> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, OnceLock};
+    use std::sync::Arc;
 
     use auth::dev_stub::DevStubSessionProvider;
     use axum::body::Body;
@@ -211,7 +211,6 @@ mod tests {
     use axum_extra::extract::cookie::Cookie;
     use bff_core::DashboardConfigurationRepository;
     use chrono::{Duration as ChronoDuration, Utc};
-    use metrics_exporter_prometheus::PrometheusHandle;
     use nexus_client::{ArmorGateway, ArmorGatewayError, PermissionAssertion};
     use persistence::PgDashboardConfigurationRepository;
     use serde_json::{json, Value};
@@ -221,16 +220,6 @@ mod tests {
 
     use super::*;
     use crate::permissions::PermissionCache;
-
-    /// `metrics::install_recorder` installs a *process-global* recorder and
-    /// panics if called twice (this binary's test harness runs every test
-    /// in-process). Tests here don't exercise metrics at all — they just
-    /// need *an* `AppState`-shaped `PrometheusHandle` — so install once,
-    /// lazily, and hand out clones.
-    fn shared_prometheus_handle() -> PrometheusHandle {
-        static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
-        HANDLE.get_or_init(crate::metrics::install_recorder).clone()
-    }
 
     /// Test-double `ArmorGateway`: returns a fixed, caller-supplied
     /// assertion set instead of ever calling a live Armor/Nexus endpoint —
@@ -257,6 +246,42 @@ mod tests {
                     expires_at: Utc::now() + ChronoDuration::minutes(5),
                 })
                 .collect())
+        }
+    }
+
+    /// Stub `SalesGateway` for dashboard tests, which exercise no sales
+    /// route — `AppState` requires the field regardless (PROMPT-25), so
+    /// this satisfies the type without pretending to be a meaningful test
+    /// double; any call panics, which would indicate a dashboard route
+    /// unexpectedly reaching the sales gateway.
+    struct UnusedSalesGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::SalesGateway for UnusedSalesGateway {
+        async fn check_account_claim(
+            &self,
+            _company_name: &str,
+            _consultant_id: &str,
+        ) -> Result<nexus_client::AccountClaimResult, nexus_client::SalesGatewayError> {
+            unimplemented!("dashboard tests never call the sales gateway")
+        }
+
+        async fn request_collaboration(
+            &self,
+            _company_reference: &str,
+            _consultant_id: &str,
+            _message: Option<&str>,
+        ) -> Result<(), nexus_client::SalesGatewayError> {
+            unimplemented!("dashboard tests never call the sales gateway")
+        }
+
+        async fn submit_referral(
+            &self,
+            _company_reference: &str,
+            _consultant_id: &str,
+            _notes: Option<&str>,
+        ) -> Result<(), nexus_client::SalesGatewayError> {
+            unimplemented!("dashboard tests never call the sales gateway")
         }
     }
 
@@ -306,9 +331,11 @@ mod tests {
             session_provider,
             dev_session_provider,
             secure_cookies: false,
-            prometheus_handle: shared_prometheus_handle(),
+            prometheus_handle: crate::metrics::shared_test_handle(),
             permission_cache,
             dashboard_repository,
+            sales_query_gateway: Arc::new(UnusedSalesGateway),
+            sales_command_gateway: Arc::new(UnusedSalesGateway),
         };
 
         let router = Router::new().nest("/api", dashboard_router(state.clone())).with_state(state);

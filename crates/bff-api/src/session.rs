@@ -76,6 +76,21 @@ pub struct AppState {
     /// once in `main` and shared read-only across every handler
     /// invocation.
     pub dashboard_repository: Arc<dyn bff_core::DashboardConfigurationRepository>,
+    /// Sales ACL gateway (ADR-016, PROMPT-24/25) used for
+    /// `SalesGateway::check_account_claim` — the user-blocking,
+    /// idempotent-read call. `Arc<dyn ...>`, matching `permission_cache`'s
+    /// and `dashboard_repository`'s convention. See `crate::sales` module
+    /// docs for why this is a *separate* `NexusSalesGateway` instance from
+    /// [`Self::sales_command_gateway`] rather than one shared field.
+    pub sales_query_gateway: Arc<dyn nexus_client::SalesGateway>,
+    /// Sales ACL gateway (ADR-016, PROMPT-24/25) used for
+    /// `SalesGateway::request_collaboration` / `SalesGateway::submit_referral`
+    /// — non-idempotent side-effecting commands that must never be
+    /// auto-retried. Deliberately a different gateway *instance* than
+    /// [`Self::sales_query_gateway`] even though both implement the same
+    /// [`nexus_client::SalesGateway`] trait — see `crate::sales` module
+    /// docs.
+    pub sales_command_gateway: Arc<dyn nexus_client::SalesGateway>,
 }
 
 impl FromRef<AppState> for PrometheusHandle {
