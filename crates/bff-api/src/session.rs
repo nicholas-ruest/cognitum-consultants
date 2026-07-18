@@ -169,6 +169,20 @@ pub struct AppState {
     /// [`Self::customer_gateway`]. See
     /// `crate::products`/`nexus_client::products` module docs.
     pub products_gateway: Arc<dyn nexus_client::ProductsGateway>,
+    /// Landscape ACL gateway (ADR-016, PROMPT-40) used for
+    /// `LandscapeGateway::request_intelligence_digest` — the idempotent-read
+    /// call. Mirrors [`Self::execution_query_gateway`]'s split rationale
+    /// exactly: see `crate::landscape`/`nexus_client::landscape` module docs
+    /// for why this is a *separate* `NexusLandscapeGateway` instance from
+    /// [`Self::landscape_command_gateway`] rather than one shared field.
+    pub landscape_query_gateway: Arc<dyn nexus_client::LandscapeGateway>,
+    /// Landscape ACL gateway (ADR-016, PROMPT-40) used for
+    /// `LandscapeGateway::submit_field_observation` — a non-idempotent
+    /// side-effecting command that must never be auto-retried. Deliberately
+    /// a different gateway *instance* than [`Self::landscape_query_gateway`]
+    /// even though both implement the same [`nexus_client::LandscapeGateway`]
+    /// trait — see `crate::landscape` module docs.
+    pub landscape_command_gateway: Arc<dyn nexus_client::LandscapeGateway>,
     /// Repository for [`bff_core::CrossCapabilityWorkflowSession`]
     /// (PROMPT-22/34, ADR-010). PROMPT-22 only built the aggregate +
     /// repository; PROMPT-34 is the first real BFF consumer

@@ -8,6 +8,7 @@ mod event_ingestion;
 mod event_notify_bridge;
 mod execution;
 mod health;
+mod landscape;
 mod metrics;
 mod notifications;
 mod notifications_sse;
@@ -242,6 +243,32 @@ async fn main() {
     let products_gateway: Arc<dyn nexus_client::ProductsGateway> =
         Arc::new(nexus_client::NexusProductsGateway::new(products_transport));
 
+    // Landscape ACL gateway (ADR-016, PROMPT-40): same shared-base-transport,
+    // two-instances split as Sales/Commit/Capacity/Execution above — see
+    // `landscape`/`nexus_client::landscape` module docs for the full decision
+    // writeup. `request_intelligence_digest` gets the read timeout + retry
+    // (idempotent, page-load-ish, low-priority per this unit's own inbound-
+    // event handling); `submit_field_observation` gets the write timeout, no
+    // retry (a non-idempotent command).
+    let landscape_base_transport = nexus_client::ReqwestNexusTransport::new(&cfg.nexus_endpoint_url)
+        .unwrap_or_else(|err| panic!("invalid nexus_endpoint_url {:?}: {err}", cfg.nexus_endpoint_url));
+    let landscape_base_transport: Arc<dyn nexus_client::NexusTransport> = Arc::new(landscape_base_transport);
+
+    let landscape_query_timeout_transport = Arc::new(nexus_client::TimeoutTransport::new(
+        landscape_base_transport.clone(),
+        nexus_client::DEFAULT_READ_TIMEOUT,
+    ));
+    let landscape_query_transport: Arc<dyn nexus_client::NexusTransport> =
+        Arc::new(nexus_client::RetryingTransport::with_default_retries(landscape_query_timeout_transport));
+    let landscape_query_gateway: Arc<dyn nexus_client::LandscapeGateway> =
+        Arc::new(nexus_client::NexusLandscapeGateway::new(landscape_query_transport));
+
+    let landscape_command_transport: Arc<dyn nexus_client::NexusTransport> = Arc::new(
+        nexus_client::TimeoutTransport::new(landscape_base_transport, nexus_client::DEFAULT_WRITE_TIMEOUT),
+    );
+    let landscape_command_gateway: Arc<dyn nexus_client::LandscapeGateway> =
+        Arc::new(nexus_client::NexusLandscapeGateway::new(landscape_command_transport));
+
     // PROMPT-22/34, ADR-010: the Postgres-backed `CrossCapabilityWorkflowSession`
     // repository — PROMPT-22 built this, but no BFF route consumed it until
     // this unit (`workflow_sessions::workflow_sessions_router`,
@@ -339,6 +366,8 @@ async fn main() {
         execution_query_gateway,
         execution_command_gateway,
         products_gateway,
+        landscape_query_gateway,
+        landscape_command_gateway,
         workflow_session_repository,
         notification_repository,
         action_queue_repository,
@@ -389,6 +418,7 @@ async fn main() {
         .merge(customer::customer_router(state.clone()))
         .merge(execution::execution_router(state.clone()))
         .merge(products::products_router(state.clone()))
+        .merge(landscape::landscape_router(state.clone()))
         .merge(workflow_sessions::workflow_sessions_router(state.clone()))
         .merge(notifications_sse::notifications_router(state.clone()))
         .merge(notifications::notifications_write_router(state.clone()));

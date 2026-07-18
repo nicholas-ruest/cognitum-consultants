@@ -18,17 +18,17 @@
  * `../ddd/anti-corruption-layers.md` §1/§2/§3/§4/§5/§6 and the literal
  * examples in PROMPT-16/ADR-015.
  *
- * The remaining two capabilities (`landscape`, `legal`) have no routes and
- * no settled resource shape yet (PROMPT-40+) — inventing named keys for them
- * now would fabricate business meaning that doesn't exist. Each still
- * exposes `all` (for capability-wide invalidation) and a generic
- * `resource()` builder that follows the same
- * [capability, resource, consultantId, ...rest] shape. Once a capability's
- * real routes land, replace its `resource()` calls with named, typed
- * methods the same way `sales.conflicts`, `commit.proposals`, `edu.catalog`,
- * `capacity.profile`, `customer.assigned`, `execution.engagements`, and
- * `products.catalog` (PROMPT-39) are done, and keep `resource()` around only
- * if it's still useful for ad hoc/rare lookups.
+ * `legal` has no routes and no settled resource shape yet (PROMPT-41+) —
+ * inventing a named key for it now would fabricate business meaning that
+ * doesn't exist. It still exposes `all` (for capability-wide invalidation)
+ * and a generic `resource()` builder that follows the same
+ * [capability, resource, consultantId, ...rest] shape. Once its real routes
+ * land, replace its `resource()` calls with named, typed methods the same
+ * way `sales.conflicts`, `commit.proposals`, `edu.catalog`,
+ * `capacity.profile`, `customer.assigned`, `execution.engagements`,
+ * `products.catalog` (PROMPT-39), and `landscape.digest` (PROMPT-40) are
+ * done, and keep `resource()` around only if it's still useful for ad
+ * hoc/rare lookups.
  */
 
 export const CAPABILITIES = [
@@ -109,7 +109,8 @@ export const queryKeys = {
   },
   landscape: {
     all: capabilityRoot('landscape'),
-    resource: genericResource('landscape'),
+    /** `GET /api/landscape/intelligence` (PROMPT-40) query key. */
+    digest: (consultantId: string) => capabilityKey('landscape', 'digest', consultantId),
   },
   legal: {
     all: capabilityRoot('legal'),

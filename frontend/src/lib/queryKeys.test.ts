@@ -107,13 +107,14 @@ describe('queryKeys.products', () => {
   })
 })
 
+describe('queryKeys.landscape', () => {
+  it('digest() matches PROMPT-40 GET /api/landscape/intelligence shape', () => {
+    expect(queryKeys.landscape.digest('consultant-1')).toEqual(['landscape', 'digest', 'consultant-1'])
+  })
+})
+
 describe('generic capability resource()', () => {
   it('builds capability-namespaced keys for capabilities with no real routes yet', () => {
-    expect(queryKeys.landscape.resource('observations', 'consultant-1')).toEqual([
-      'landscape',
-      'observations',
-      'consultant-1',
-    ])
     expect(queryKeys.legal.resource('contracts', 'consultant-1')).toEqual([
       'legal',
       'contracts',
@@ -121,7 +122,7 @@ describe('generic capability resource()', () => {
     ])
   })
 
-  it('every non-sales/commit/edu/capacity/customer/execution/products capability exposes all + resource', () => {
+  it('every non-sales/commit/edu/capacity/customer/execution/products/landscape capability exposes all + resource', () => {
     const generic = CAPABILITIES.filter(
       (c) =>
         c !== 'sales' &&
@@ -130,7 +131,8 @@ describe('generic capability resource()', () => {
         c !== 'capacity' &&
         c !== 'customer' &&
         c !== 'execution' &&
-        c !== 'products',
+        c !== 'products' &&
+        c !== 'landscape',
     )
 
     for (const capability of generic) {

@@ -21,6 +21,7 @@ pub mod commit;
 pub mod customer;
 pub mod edu;
 pub mod execution;
+pub mod landscape;
 pub mod products;
 pub mod reqwest_transport;
 pub mod retry;
@@ -35,6 +36,9 @@ pub use commit::{CommitGateway, CommitGatewayError, NexusCommitGateway, Proposal
 pub use customer::{CustomerContextCard, CustomerGateway, CustomerGatewayError, NexusCustomerGateway};
 pub use edu::{EduGateway, EduGatewayError, LearningSnapshot, NexusEduGateway};
 pub use execution::{EngagementSnapshot, EngagementTaskSummary, ExecutionGateway, ExecutionGatewayError, NexusExecutionGateway};
+pub use landscape::{
+    FieldObservationSubmission, IntelligenceDigestItem, LandscapeGateway, LandscapeGatewayError, NexusLandscapeGateway,
+};
 pub use products::{NexusProductsGateway, ProductReferenceCard, ProductsGateway, ProductsGatewayError};
 pub use reqwest_transport::ReqwestNexusTransport;
 pub use retry::{AGGRESSIVE_MAX_RETRIES, DEFAULT_MAX_RETRIES, RetryingTransport};

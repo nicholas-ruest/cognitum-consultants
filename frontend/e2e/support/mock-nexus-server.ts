@@ -42,7 +42,12 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * spec can assert the BFF forwarded the expected `task_id`/`consultant_id`.
  * Products' `GET /products/v1/catalog` (PROMPT-39) always answers with the
  * fixed `PRODUCT_CATALOG_FIXTURE` below, same "fixed, not dynamically
- * configurable" pattern as Edu/Customer/Execution.
+ * configurable" pattern as Edu/Customer/Execution. Landscape's
+ * `GET /landscape/v1/intelligence` (PROMPT-40) always answers with the fixed
+ * `INTELLIGENCE_DIGEST_FIXTURE` below, same pattern; `POST
+ * /landscape/v1/observations` records every request it receives (mirroring
+ * `taskCompletionRequests`/`capacityProfileUpdates` above) so a spec can
+ * assert the BFF forwarded the expected `submitted_by`/`observation_text`.
  *
  * # One exception: the `no_match` fixture, by company name (PROMPT-34)
  * `commit-sales-deeplink.spec.ts` needs a `creation_allowed: true` result to
@@ -289,6 +294,38 @@ const ENGAGEMENT_SNAPSHOT_FIXTURE: EngagementSnapshot[] = [
   },
 ]
 
+/** `IntelligenceDigestItem` shape, mirrored from `crates/nexus-client/src/landscape.rs` (PROMPT-40). */
+export interface IntelligenceDigestItem {
+  intel_id: string
+  topic: string
+  summary: string
+  published_at: string
+  deep_link: string | null
+}
+
+/**
+ * Fixed `GET /landscape/v1/intelligence` fixture (PROMPT-40): one item with
+ * a deep link, one without, proving the frontend's digest rendering against
+ * both shapes — mirroring `ENGAGEMENT_SNAPSHOT_FIXTURE`'s "fixed, not
+ * dynamically configurable" rationale above.
+ */
+const INTELLIGENCE_DIGEST_FIXTURE: IntelligenceDigestItem[] = [
+  {
+    intel_id: 'intel-1',
+    topic: 'Cloud Migration Trends',
+    summary: 'Enterprises are accelerating multi-cloud adoption.',
+    published_at: '2026-01-01T00:00:00Z',
+    deep_link: 'https://landscape.cognitum.one/intel/intel-1',
+  },
+  {
+    intel_id: 'intel-2',
+    topic: 'Regulatory Shifts',
+    summary: 'New data residency requirements in EMEA.',
+    published_at: '2026-01-02T00:00:00Z',
+    deep_link: null,
+  },
+]
+
 export interface CapabilityEventReceived {
   origin_capability: string
   origin_event_id: string
@@ -365,6 +402,10 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
   // `consultant_id` to assert on this one — see `products.rs`'s module docs
   // for why — so this just counts/records hits).
   const productCatalogRequests: RecordedCommand[] = []
+  // PROMPT-40: `POST /landscape/v1/observations` requests, recorded so a
+  // spec can confirm the BFF forwarded the expected `submitted_by`/
+  // `observation_text`.
+  const fieldObservations: RecordedCommand[] = []
   // PROMPT-33 e2e: events queued via `POST /_test/enqueue-event` and
   // drained (returned once, then cleared) on the next `GET
   // events/v1/poll` — see `notifications-sse.spec.ts`. Draining, not
@@ -402,6 +443,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
           { consultant_id: consultantId, capability: 'customer', scope: 'default', expires_at: expiresAt },
           { consultant_id: consultantId, capability: 'execution', scope: 'default', expires_at: expiresAt },
           { consultant_id: consultantId, capability: 'products', scope: 'default', expires_at: expiresAt },
+          { consultant_id: consultantId, capability: 'landscape', scope: 'default', expires_at: expiresAt },
         ],
       })
       return
@@ -555,6 +597,27 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    // Landscape intelligence-digest query (ADR-016, PROMPT-40): always
+    // answers with the fixed `INTELLIGENCE_DIGEST_FIXTURE`, matching
+    // `crates/nexus-client/src/landscape.rs`'s `IntelligenceDigestEnvelope`
+    // (`{"items": [...]}`) convention.
+    if (method === 'GET' && url.pathname === '/landscape/v1/intelligence') {
+      sendJson(response, 200, { items: INTELLIGENCE_DIGEST_FIXTURE })
+      return
+    }
+
+    // Landscape field-observation submission command (ADR-016, PROMPT-40):
+    // always accepts and records the request, matching
+    // `crates/nexus-client/src/landscape.rs`'s `FieldObservationSubmission`
+    // shape — fire-and-confirm, same "no documented ack body" convention as
+    // Sales' `collaboration-requests`/`referrals` above.
+    if (method === 'POST' && url.pathname === '/landscape/v1/observations') {
+      const body = await readJsonBody(request)
+      fieldObservations.push({ path: url.pathname, body, receivedAt: new Date().toISOString() })
+      sendJson(response, 200, {})
+      return
+    }
+
     // Events poll (PROMPT-30/PROMPT-33): `bff-api`'s ingestion polling loop
     // (`crates/bff-api/src/event_ingestion.rs`) expects a bare JSON array
     // of `CapabilityEventReceived`. Drains whatever `_test/enqueue-event`
@@ -614,6 +677,11 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    if (method === 'GET' && url.pathname === '/_test/field-observations') {
+      sendJson(response, 200, fieldObservations)
+      return
+    }
+
     // Test-injection route (PROMPT-33): queues one `CapabilityEventReceived`
     // for the *next* `GET events/v1/poll` to pick up — how
     // `notifications-sse.spec.ts` drives a real Nexus->ingestion->NOTIFY/
@@ -637,6 +705,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       customerContextRequests.length = 0
       taskCompletionRequests.length = 0
       productCatalogRequests.length = 0
+      fieldObservations.length = 0
       sendJson(response, 200, {})
       return
     }

@@ -401,6 +401,24 @@ mod tests {
         }
     }
 
+    struct UnusedLandscapeGateway;
+
+    #[async_trait::async_trait]
+    impl nexus_client::LandscapeGateway for UnusedLandscapeGateway {
+        async fn request_intelligence_digest(
+            &self,
+        ) -> Result<Vec<nexus_client::IntelligenceDigestItem>, nexus_client::LandscapeGatewayError> {
+            unimplemented!("dashboard tests never call the landscape gateway")
+        }
+
+        async fn submit_field_observation(
+            &self,
+            _submission: nexus_client::FieldObservationSubmission,
+        ) -> Result<(), nexus_client::LandscapeGatewayError> {
+            unimplemented!("dashboard tests never call the landscape gateway")
+        }
+    }
+
     async fn migrated_pool() -> (persistence::Pool, testcontainers_modules::testcontainers::ContainerAsync<Postgres>) {
         let container = Postgres::default().start().await.expect("failed to start postgres container");
         let host = container.get_host().await.expect("failed to resolve container host");
@@ -469,6 +487,8 @@ mod tests {
             execution_query_gateway: Arc::new(UnusedExecutionGateway),
             execution_command_gateway: Arc::new(UnusedExecutionGateway),
             products_gateway: Arc::new(UnusedProductsGateway),
+            landscape_query_gateway: Arc::new(UnusedLandscapeGateway),
+            landscape_command_gateway: Arc::new(UnusedLandscapeGateway),
             workflow_session_repository,
             notification_repository,
             action_queue_repository,

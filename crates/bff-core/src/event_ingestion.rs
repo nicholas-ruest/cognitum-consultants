@@ -231,6 +231,20 @@ pub enum EventClassification {
 ///   refreshed (via the same SSE-pushed-notification -> `invalidateQueries`
 ///   path ADR-015 already wires up for every other notification), not
 ///   anything this crate's ingestion pipeline itself needs to special-case.
+/// # PROMPT-40 (Landscape ACL) additions: none
+/// Landscape's one inbound event (`anti-corruption-layers.md` §8:
+/// `IntelligenceItemPublished`) was judged against the same "does this imply
+/// the consultant must now go *do* something, beyond just being told" test
+/// the other capabilities' events were:
+/// - `IntelligenceItemPublished` -> **notification**. This unit's own
+///   prompt text is explicit: a newly published intelligence item "feeds a
+///   low-priority refresh" — informational by nature (a consultant may want
+///   to know new approved market intelligence is available), not a prompt
+///   to go take some specific action the way `task_assigned` names one. Not
+///   added to this list; classifies as [`EventClassification::Notification`]
+///   via the existing default — the same "low priority, just refresh/
+///   notify" reasoning `ProductCatalogUpdated`'s PROMPT-39 doc comment above
+///   already establishes for Products' own single inbound event.
 const ACTION_EVENT_TYPES: &[&str] = &[
     "task_assigned",
     "collaboration_request_acknowledged",
@@ -1316,6 +1330,44 @@ mod tests {
     fn classify_routes_product_catalog_updated_to_notification() {
         assert_eq!(classify("product_catalog_updated"), EventClassification::Notification);
         assert_eq!(classify("ProductCatalogUpdated"), EventClassification::Notification);
+    }
+
+    // --- Landscape events as real concrete test cases (PROMPT-40) --------
+
+    /// `IntelligenceItemPublished` — informational per `ACTION_EVENT_TYPES`'s
+    /// PROMPT-40 doc comment — used as the real Landscape event PROMPT-40
+    /// asks to be classified against, matching
+    /// `products_events_are_classified_and_ingested_as_documented`'s shape
+    /// above.
+    #[tokio::test]
+    async fn landscape_events_are_classified_and_ingested_as_documented() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+        let bus = EventBus::new(16);
+
+        let mut intelligence_item_published = event("iip-1", "intelligence_item_published");
+        intelligence_item_published.origin_capability = "landscape".to_string();
+
+        let result = ingest_events(vec![intelligence_item_published.clone()], &notification_repo, &action_repo, &bus).await;
+
+        assert_eq!(result.inserted(), 1);
+        assert_eq!(result.rejected(), 0);
+
+        let notifications = notification_repo.rows.lock().unwrap();
+        assert_eq!(notifications.len(), 1, "IntelligenceItemPublished is informational, low-priority");
+        assert!(notifications.contains_key(&("landscape".to_string(), "iip-1".to_string())));
+
+        assert_eq!(
+            action_repo.rows.lock().unwrap().len(),
+            0,
+            "IntelligenceItemPublished never implies a required action"
+        );
+    }
+
+    #[test]
+    fn classify_routes_intelligence_item_published_to_notification() {
+        assert_eq!(classify("intelligence_item_published"), EventClassification::Notification);
+        assert_eq!(classify("IntelligenceItemPublished"), EventClassification::Notification);
     }
 
     // --- confirmation events / ingest_confirmation (PROMPT-38) ------------
