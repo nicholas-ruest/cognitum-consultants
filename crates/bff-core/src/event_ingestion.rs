@@ -44,6 +44,7 @@
 
 use chrono::{DateTime, Utc};
 use tokio::sync::broadcast;
+use uuid::Uuid;
 
 use crate::{
     ActionQueueEntry, ActionQueueEntryError, ActionQueueRepository, NotificationItem,
@@ -215,10 +216,109 @@ fn build_action_queue_entry(
 /// Aggregate published to the [`EventBus`] on a fresh
 /// ([`SaveOutcome::Inserted`]) ingestion — PROMPT-31's SSE endpoint is the
 /// intended subscriber.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestedEvent {
     Notification(NotificationItem),
     Action(ActionQueueEntry),
+}
+
+/// Wire shape of the payload passed to Postgres `NOTIFY <channel>,
+/// '<payload>'` (ADR-014's cross-instance SSE fan-out bridge, PROMPT-32).
+///
+/// # Pointer, not the full event — and why
+/// Postgres caps a `NOTIFY` payload at 8000 bytes, server-enforced, with no
+/// way for a producer to detect the cutoff ahead of time other than staying
+/// well clear of it. Neither [`NotificationItem`] nor [`ActionQueueEntry`]
+/// bound `title`/`body`'s length (structural, not runtime-checked) — a full
+/// [`IngestedEvent`] JSON payload is *usually* small (a short title/body/
+/// deep_link), but "usually" is not a safe bet against a hard server-side
+/// limit a producer can't recover from mid-`NOTIFY`. So this repo instead
+/// NOTIFYs a minimal pointer — `kind` plus `id`, comfortably under 100 bytes
+/// regardless of the aggregate's actual text length — and has every
+/// listener re-fetch the full aggregate from Postgres by `id`
+/// ([`NotificationRepository::find_by_id`] /
+/// [`ActionQueueRepository::find_by_id`], added for exactly this purpose;
+/// see [`hydrate_notify_pointer`]). This trades one extra indexed read per
+/// notification for a payload size that can never blow the 8000-byte
+/// limit — the safer default absent a proven, tight bound on title/body
+/// length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EventNotifyPointer {
+    Notification { id: Uuid },
+    ActionQueueEntry { id: Uuid },
+}
+
+impl From<&IngestedEvent> for EventNotifyPointer {
+    fn from(event: &IngestedEvent) -> Self {
+        match event {
+            IngestedEvent::Notification(item) => Self::Notification { id: item.id() },
+            IngestedEvent::Action(entry) => Self::ActionQueueEntry { id: entry.id() },
+        }
+    }
+}
+
+/// The Postgres `NOTIFY`/`LISTEN` channel name this repo's cross-instance
+/// SSE fan-out bridge uses (ADR-014, PROMPT-32) — shared verbatim between
+/// the publisher (`persistence::PgNotifyPublisher`) and every instance's
+/// listener bridge (`bff-api::event_notify_bridge`).
+pub const EVENT_NOTIFY_CHANNEL: &str = "bff_ingested_events";
+
+/// Reconstructs the full [`IngestedEvent`] a NOTIFY payload pointed to (see
+/// [`EventNotifyPointer`]'s doc comment for why this indirection exists),
+/// by `id`, via whichever repository matches the pointer's `kind`. Returns
+/// `Ok(None)` — not an error — if the id is unknown to the repository: a
+/// listener bridge treats that as "skip this notification" rather than a
+/// hard failure (see `bff-api::event_notify_bridge` for the call site).
+pub async fn hydrate_notify_pointer(
+    pointer: EventNotifyPointer,
+    notification_repo: &dyn NotificationRepository,
+    action_queue_repo: &dyn ActionQueueRepository,
+) -> Result<Option<IngestedEvent>, RepoError> {
+    match pointer {
+        EventNotifyPointer::Notification { id } => {
+            Ok(notification_repo.find_by_id(id).await?.map(IngestedEvent::Notification))
+        }
+        EventNotifyPointer::ActionQueueEntry { id } => {
+            Ok(action_queue_repo.find_by_id(id).await?.map(IngestedEvent::Action))
+        }
+    }
+}
+
+/// Anything ingestion can hand a freshly-inserted [`IngestedEvent`] to.
+/// [`EventBus`] implements this directly — single-instance, in-process
+/// delivery, and still what this module's own unit tests exercise below.
+/// The production cross-instance path
+/// (`persistence::PgNotifyPublisher`, ADR-014/PROMPT-32) is the other
+/// implementation: rather than writing straight into a local [`EventBus`],
+/// it issues a Postgres `NOTIFY` so *every* `bff-api` instance's own
+/// listener bridge learns about the event — including the instance that
+/// did the ingesting, which now receives its own event back through the
+/// same NOTIFY/LISTEN round-trip every other instance does. That round-trip
+/// is not a meaningful latency/ordering concern in practice: a `NOTIFY`
+/// issued inside the same Postgres server a `LISTEN`ing connection is
+/// already attached to is delivered near-instantly (sub-millisecond,
+/// same-process signaling within Postgres — no polling involved on either
+/// side), and delivery order per channel matches commit order, so the
+/// ingesting instance sees its own event essentially as fast as it would
+/// have via a direct local publish, just through one extra (cheap) hop.
+#[async_trait::async_trait]
+pub trait EventPublisher: Send + Sync {
+    async fn publish(&self, event: IngestedEvent);
+}
+
+#[async_trait::async_trait]
+impl EventPublisher for EventBus {
+    async fn publish(&self, event: IngestedEvent) {
+        // Calls the inherent `EventBus::publish` below (inherent methods
+        // take priority over trait methods with the same name, so this is
+        // not infinite recursion) — this impl exists purely so `EventBus`
+        // satisfies the `EventPublisher` trait object bound `ingest_events`
+        // et al. take, letting a caller pass either an `&EventBus` (tests,
+        // and this module's own examples) or an
+        // `&persistence::PgNotifyPublisher` (production) interchangeably.
+        EventBus::publish(self, event);
+    }
 }
 
 /// Per-event result of [`ingest_events`], for logging/observability at the
@@ -325,9 +425,11 @@ impl Default for EventBus {
 /// Ingests a batch of [`CapabilityEventReceived`] envelopes: classifies
 /// each, builds the corresponding aggregate, saves it via the matching
 /// repository, and — only on a fresh insert ([`SaveOutcome::Inserted`]) —
-/// publishes it to `event_bus`. See the module docs for the two-layer
-/// dedup this relies on (this function is layer 1, the correctness
-/// guarantee).
+/// hands it to `publisher` (an [`EventPublisher`] — [`EventBus`] directly
+/// for single-instance/test use, `persistence::PgNotifyPublisher` in
+/// production, see that trait's doc comment). See the module docs for the
+/// two-layer dedup this relies on (this function is layer 1, the
+/// correctness guarantee).
 ///
 /// Never panics or short-circuits the batch on one bad event: a malformed
 /// event (fails aggregate construction) or a repository failure is recorded
@@ -337,7 +439,7 @@ pub async fn ingest_events(
     events: Vec<CapabilityEventReceived>,
     notification_repo: &dyn NotificationRepository,
     action_queue_repo: &dyn ActionQueueRepository,
-    event_bus: &EventBus,
+    publisher: &dyn EventPublisher,
 ) -> IngestionResult {
     let mut result = IngestionResult::default();
 
@@ -345,10 +447,10 @@ pub async fn ingest_events(
         let classification = classify(&event.event_type);
         let outcome = match classification {
             EventClassification::Notification => {
-                ingest_notification(&event, notification_repo, event_bus).await
+                ingest_notification(&event, notification_repo, publisher).await
             }
             EventClassification::Action => {
-                ingest_action(&event, action_queue_repo, event_bus).await
+                ingest_action(&event, action_queue_repo, publisher).await
             }
         };
         result.outcomes.push(outcome);
@@ -360,7 +462,7 @@ pub async fn ingest_events(
 async fn ingest_notification(
     event: &CapabilityEventReceived,
     notification_repo: &dyn NotificationRepository,
-    event_bus: &EventBus,
+    publisher: &dyn EventPublisher,
 ) -> IngestionOutcome {
     let item = match build_notification_item(event) {
         Ok(item) => item,
@@ -370,7 +472,7 @@ async fn ingest_notification(
     match notification_repo.save(&item).await {
         Ok(save_outcome) => {
             if save_outcome == SaveOutcome::Inserted {
-                event_bus.publish(IngestedEvent::Notification(item));
+                publisher.publish(IngestedEvent::Notification(item)).await;
             }
             saved(event, EventClassification::Notification, save_outcome)
         }
@@ -381,7 +483,7 @@ async fn ingest_notification(
 async fn ingest_action(
     event: &CapabilityEventReceived,
     action_queue_repo: &dyn ActionQueueRepository,
-    event_bus: &EventBus,
+    publisher: &dyn EventPublisher,
 ) -> IngestionOutcome {
     let entry = match build_action_queue_entry(event) {
         Ok(entry) => entry,
@@ -391,7 +493,7 @@ async fn ingest_action(
     match action_queue_repo.save(&entry).await {
         Ok(save_outcome) => {
             if save_outcome == SaveOutcome::Inserted {
-                event_bus.publish(IngestedEvent::Action(entry));
+                publisher.publish(IngestedEvent::Action(entry)).await;
             }
             saved(event, EventClassification::Action, save_outcome)
         }
@@ -470,6 +572,10 @@ mod tests {
                 .collect())
         }
 
+        async fn find_by_id(&self, id: Uuid) -> Result<Option<NotificationItem>, RepoError> {
+            Ok(self.rows.lock().unwrap().values().find(|item| item.id() == id).cloned())
+        }
+
         async fn save(&self, item: &NotificationItem) -> Result<SaveOutcome, RepoError> {
             let mut rows = self.rows.lock().unwrap();
             let key = (item.origin_capability().to_string(), item.origin_event_id().to_string());
@@ -506,6 +612,10 @@ mod tests {
                 .filter(|entry| entry.consultant_id() == consultant_id)
                 .cloned()
                 .collect())
+        }
+
+        async fn find_by_id(&self, id: Uuid) -> Result<Option<ActionQueueEntry>, RepoError> {
+            Ok(self.rows.lock().unwrap().values().find(|entry| entry.id() == id).cloned())
         }
 
         async fn save(&self, entry: &ActionQueueEntry) -> Result<SaveOutcome, RepoError> {
@@ -734,5 +844,150 @@ mod tests {
         assert_eq!(parsed.event_type, "collaboration_request_acknowledged");
         assert_eq!(parsed.consultant_id, "consultant-1");
         assert_eq!(parsed.received_at, t0());
+    }
+
+    // --- EventNotifyPointer / hydrate_notify_pointer (PROMPT-32) ----------
+
+    /// The NOTIFY payload's wire shape: `{"kind":"notification","id":"..."}`
+    /// / `{"kind":"action_queue_entry","id":"..."}` — small and stable
+    /// regardless of the underlying aggregate's `title`/`body` length (the
+    /// whole point of pointing rather than embedding, see the type's doc
+    /// comment).
+    #[test]
+    fn event_notify_pointer_serializes_to_the_documented_wire_shape() {
+        let id = Uuid::new_v4();
+
+        let notification_json =
+            serde_json::to_value(EventNotifyPointer::Notification { id }).unwrap();
+        assert_eq!(
+            notification_json,
+            serde_json::json!({"kind": "notification", "id": id.to_string()})
+        );
+
+        let action_json =
+            serde_json::to_value(EventNotifyPointer::ActionQueueEntry { id }).unwrap();
+        assert_eq!(
+            action_json,
+            serde_json::json!({"kind": "action_queue_entry", "id": id.to_string()})
+        );
+    }
+
+    /// `EventNotifyPointer` round-trips through JSON — the shape every
+    /// `PgListener` payload is decoded back into.
+    #[test]
+    fn event_notify_pointer_round_trips_through_json() {
+        for pointer in [
+            EventNotifyPointer::Notification { id: Uuid::new_v4() },
+            EventNotifyPointer::ActionQueueEntry { id: Uuid::new_v4() },
+        ] {
+            let json = serde_json::to_string(&pointer).unwrap();
+            let decoded: EventNotifyPointer = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, pointer);
+        }
+    }
+
+    /// `From<&IngestedEvent>` picks the right variant and carries the
+    /// aggregate's own `id`, not a fresh one.
+    #[test]
+    fn event_notify_pointer_from_ingested_event_carries_the_aggregate_id() {
+        let notification = notification_for_hydrate_tests("consultant-1", "evt-1");
+        let notification_id = notification.id();
+        let ingested = IngestedEvent::Notification(notification);
+        assert_eq!(
+            EventNotifyPointer::from(&ingested),
+            EventNotifyPointer::Notification { id: notification_id }
+        );
+
+        let entry = action_entry_for_hydrate_tests("consultant-1", "evt-2");
+        let entry_id = entry.id();
+        let ingested = IngestedEvent::Action(entry);
+        assert_eq!(
+            EventNotifyPointer::from(&ingested),
+            EventNotifyPointer::ActionQueueEntry { id: entry_id }
+        );
+    }
+
+    fn notification_for_hydrate_tests(consultant_id: &str, origin_event_id: &str) -> NotificationItem {
+        NotificationItem::new(
+            consultant_id,
+            "sales",
+            origin_event_id,
+            "Referral submitted",
+            "A new referral was submitted for review.",
+            None,
+            t0(),
+        )
+        .unwrap()
+    }
+
+    fn action_entry_for_hydrate_tests(consultant_id: &str, origin_event_id: &str) -> ActionQueueEntry {
+        ActionQueueEntry::new(
+            consultant_id,
+            "sales",
+            origin_event_id,
+            "Collaboration request",
+            "A collaboration request needs your response.",
+            None,
+            t0() + chrono::Duration::hours(72),
+            t0(),
+        )
+        .unwrap()
+    }
+
+    /// `hydrate_notify_pointer` re-fetches the full aggregate the pointer
+    /// named, via the matching repository — the reconstruction half of the
+    /// NOTIFY/LISTEN bridge, exercised here against the same in-memory
+    /// mocks the rest of this module already uses (no Postgres needed to
+    /// prove this plumbing; the real `find_by_id` SQL is covered by
+    /// `persistence`'s own repository tests).
+    #[tokio::test]
+    async fn hydrate_notify_pointer_reconstructs_a_notification() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+        let item = notification_for_hydrate_tests("consultant-1", "evt-1");
+        notification_repo.save(&item).await.unwrap();
+
+        let hydrated =
+            hydrate_notify_pointer(EventNotifyPointer::Notification { id: item.id() }, &notification_repo, &action_repo)
+                .await
+                .unwrap();
+
+        assert_eq!(hydrated, Some(IngestedEvent::Notification(item)));
+    }
+
+    #[tokio::test]
+    async fn hydrate_notify_pointer_reconstructs_an_action_queue_entry() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+        let entry = action_entry_for_hydrate_tests("consultant-1", "evt-1");
+        action_repo.save(&entry).await.unwrap();
+
+        let hydrated = hydrate_notify_pointer(
+            EventNotifyPointer::ActionQueueEntry { id: entry.id() },
+            &notification_repo,
+            &action_repo,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(hydrated, Some(IngestedEvent::Action(entry)));
+    }
+
+    /// A pointer naming an id the repository doesn't have is `Ok(None)`,
+    /// not an error — the listener bridge's "skip, don't crash" contract.
+    #[tokio::test]
+    async fn hydrate_notify_pointer_returns_none_for_an_unknown_id() {
+        let notification_repo = MockNotificationRepo::default();
+        let action_repo = MockActionQueueRepo::default();
+
+        let hydrated = hydrate_notify_pointer(
+            EventNotifyPointer::Notification { id: Uuid::new_v4() },
+            &notification_repo,
+            &action_repo,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(hydrated, None);
     }
 }

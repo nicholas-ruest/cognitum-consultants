@@ -120,6 +120,83 @@ shutdown"` followed immediately by `"bff-api shut down"`, with `docker stop` com
 nowhere near Docker's 10-second default grace period before it would escalate to `SIGKILL`. See the
 Verification section of the PROMPT-28 work log / this repo's CI `deploy` job for the reproducible version.
 
+## Cross-instance SSE fan-out: Postgres `NOTIFY`/`LISTEN` (PROMPT-32, ADR-014)
+
+ADR-014 flags a requirement this container topology creates once more than one `bff-api` instance runs behind
+a load balancer: `crates/bff-core/src/event_ingestion.rs`'s `EventBus` (PROMPT-30/31's SSE delivery mechanism)
+is purely in-process (`tokio::sync::broadcast`). A notification ingested by instance A never reaches a
+browser whose `GET /api/notifications/stream` connection is held by instance B, because each instance has its
+own independent `EventBus`. ADR-014 names two options — sticky/session-affinity routing, or cross-instance
+fan-out via Postgres `LISTEN`/`NOTIFY` — and recommends the latter; this is what's implemented.
+
+### The two-hop delivery path
+
+```text
+instance A ingests a fresh NotificationItem/ActionQueueEntry (SaveOutcome::Inserted)
+  -> persistence::PgNotifyPublisher::publish -> `SELECT pg_notify($1, $2)`
+  -> Postgres fans the NOTIFY out to every connection currently LISTENing on that channel
+       -> instance A's own event_notify_bridge::run_listen_bridge -> instance A's local EventBus -> instance A's SSE subscribers
+       -> instance B's event_notify_bridge::run_listen_bridge -> instance B's local EventBus -> instance B's SSE subscribers
+       -> ...every other running instance, identically
+```
+
+Every instance runs **two** background tasks (`crates/bff-api/src/main.rs`), not one:
+
+1. `event_ingestion::run_polling_loop` (PROMPT-30) — polls Nexus, ingests events, and on a fresh insert hands
+   the event to a `persistence::PgNotifyPublisher` (an `bff_core::EventPublisher`) instead of writing directly
+   into this instance's own `EventBus`.
+2. `event_notify_bridge::run_listen_bridge` (PROMPT-32, new) — holds a dedicated `persistence::PgListener`
+   connection subscribed to the channel below for the life of the process; for every NOTIFY it receives, it
+   reconstructs the full aggregate and publishes it into *this instance's* local `EventBus`, which
+   `notifications_sse` (PROMPT-31, unchanged) already subscribes to.
+
+The net effect: the instance that did the ingesting no longer publishes to its own subscribers directly — it
+receives its own event back through the same Postgres round-trip every other instance does. That round-trip
+is not a meaningful latency/ordering concern in practice: a `NOTIFY` issued on one connection is delivered to
+every `LISTEN`ing connection on the same Postgres server via Postgres's own in-server signaling (not polling),
+essentially immediately — see `crates/bff-api/src/event_notify_bridge.rs`'s module docs and its
+cross-instance test (`a_notify_from_one_connection_reaches_two_independent_listener_bridges`), which measures
+this reliably completing well under the test's 5-second timeout.
+
+### Channel name and payload shape
+
+- **Channel**: `bff_core::EVENT_NOTIFY_CHANNEL` = `"bff_ingested_events"` — one shared channel for both
+  `NotificationItem` and `ActionQueueEntry` events, discriminated by the payload's `kind` field.
+- **Payload**: a lightweight **pointer**, not the full event:
+  ```json
+  {"kind": "notification", "id": "8f14e45f-ceea-467e-bd9b-90b9cd7b8100"}
+  {"kind": "action_queue_entry", "id": "3c6f1a2e-2f3a-4b8f-9c3d-7a1e2f4b5c6d"}
+  ```
+  **Why a pointer instead of the full `IngestedEvent` JSON**: Postgres caps a `NOTIFY` payload at 8000 bytes,
+  server-enforced, with no way for a producer to detect the cutoff ahead of time other than staying well
+  clear of it. Neither `NotificationItem` nor `ActionQueueEntry` bound `title`/`body`'s length (a structural
+  choice, not a runtime-checked one) — a full event JSON payload is *usually* small, but "usually" is not a
+  safe bet against a hard server-side limit a producer can't recover from mid-`NOTIFY`. The `{kind, id}`
+  pointer is comfortably under 100 bytes regardless of the aggregate's actual text length, so it can never
+  blow the limit. The cost is one extra indexed read per notification: every listener bridge re-fetches the
+  full aggregate from Postgres by `id` (`NotificationRepository::find_by_id` /
+  `ActionQueueRepository::find_by_id`, added for this purpose) before publishing it to its local `EventBus`.
+  See `crates/bff-core/src/event_ingestion.rs`'s `EventNotifyPointer` doc comment for the full writeup.
+
+### Reconnection
+
+A `PgListener`'s connection can drop (network blip, Postgres restart/failover). `run_listen_bridge` never
+returns — on a `recv()` error or a failed initial `listen()` call, it logs, waits 2 seconds, and retries from
+scratch. A gap during reconnection only costs a real-time push, not data: the underlying row is already
+durably in Postgres by the time it was ever NOTIFYed (publish only happens after `SaveOutcome::Inserted`), so
+it still shows up on the consultant's next full-list fetch regardless of whether the SSE push arrived.
+
+### Verified: genuine cross-instance delivery, not same-process reuse
+
+`crates/bff-api/src/event_notify_bridge.rs`'s tests spin up two entirely independent `(PgListener, EventBus)`
+pairs against one shared (testcontainers) Postgres — simulating two separate `bff-api` instances with no
+shared in-process state at all — and NOTIFY from a third connection standing in for "instance A's ingestion"
+(the same `persistence::PgNotifyPublisher` production uses). Both instances' independent `EventBus`es receive
+the hydrated event; neither is ever touched directly by the publisher, so the only path an event can reach
+either `EventBus` is the real NOTIFY/LISTEN mechanism. See that test module for the full test, and
+`crates/persistence/src/event_notify.rs` for the lower-level unit-style proof that the JSON payload survives
+an actual `pg_notify`/`PgListener` round-trip byte-for-byte.
+
 ## Migrations: an explicit pipeline step, not implicit at startup
 
 Per ADR-014 ("migrations run... via an explicit CI/CD deploy step in production... not as an implicit

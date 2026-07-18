@@ -107,6 +107,24 @@ impl NotificationRepository for PgNotificationRepository {
         rows.into_iter().map(row_to_aggregate).collect()
     }
 
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<NotificationItem>, RepoError> {
+        let row = sqlx::query_as!(
+            NotificationItemRow,
+            r#"
+            SELECT id, consultant_id, origin_capability, origin_event_id,
+                   title, body, deep_link, read_state, created_at
+            FROM notification_items
+            WHERE id = $1
+            "#,
+            id,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|err| RepoError::OperationFailed(err.to_string()))?;
+
+        row.map(row_to_aggregate).transpose()
+    }
+
     async fn save(&self, item: &NotificationItem) -> Result<SaveOutcome, RepoError> {
         let result = sqlx::query!(
             r#"
@@ -206,6 +224,24 @@ mod tests {
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], item);
+    }
+
+    /// `find_by_id` (PROMPT-32's NOTIFY/LISTEN bridge reconstruction path):
+    /// a saved item is found by its own id, and an unknown id is `Ok(None)`,
+    /// not an error.
+    #[tokio::test]
+    async fn find_by_id_finds_a_saved_item_and_returns_none_for_an_unknown_id() {
+        let (pool, _container) = migrated_pool().await;
+        let repo = PgNotificationRepository::new(pool);
+
+        let item = item("consultant-1", "event-1");
+        repo.save(&item).await.expect("save failed");
+
+        let found = repo.find_by_id(item.id()).await.expect("find_by_id failed");
+        assert_eq!(found, Some(item));
+
+        let missing = repo.find_by_id(Uuid::new_v4()).await.expect("find_by_id failed");
+        assert_eq!(missing, None);
     }
 
     #[tokio::test]

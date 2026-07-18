@@ -101,6 +101,24 @@ impl ActionQueueRepository for PgActionQueueRepository {
         rows.into_iter().map(row_to_aggregate).collect()
     }
 
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<ActionQueueEntry>, RepoError> {
+        let row = sqlx::query_as!(
+            ActionQueueEntryRow,
+            r#"
+            SELECT id, consultant_id, origin_capability, origin_event_id,
+                   title, body, deep_link, action_state, expires_at, created_at
+            FROM action_queue_entries
+            WHERE id = $1
+            "#,
+            id,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|err| RepoError::OperationFailed(err.to_string()))?;
+
+        row.map(row_to_aggregate).transpose()
+    }
+
     async fn save(&self, entry: &ActionQueueEntry) -> Result<SaveOutcome, RepoError> {
         let result = sqlx::query!(
             r#"
@@ -282,6 +300,42 @@ mod tests {
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], entry);
+    }
+
+    /// `find_by_id` (PROMPT-32's NOTIFY/LISTEN bridge reconstruction path):
+    /// a saved entry is found by its own id, and an unknown id is `Ok(None)`,
+    /// not an error.
+    ///
+    /// Builds the entry with a fixed, microsecond-precision timestamp
+    /// (rather than the `entry()`/`entry_with_state()` helpers above, which
+    /// bake in `Utc::now()` for `created_at`) — see
+    /// `save_and_find_by_consultant_id_round_trips_an_entry`'s doc comment
+    /// for why a nanosecond-precision Rust timestamp would fail this exact
+    /// equality check for a reason unrelated to `find_by_id`.
+    #[tokio::test]
+    async fn find_by_id_finds_a_saved_entry_and_returns_none_for_an_unknown_id() {
+        let (pool, _container) = migrated_pool().await;
+        let repo = PgActionQueueRepository::new(pool);
+
+        let now: DateTime<Utc> = "2026-01-01T00:00:00Z".parse().unwrap();
+        let entry = ActionQueueEntry::new(
+            "consultant-1",
+            "sales",
+            "event-1",
+            "Collaboration request",
+            "A collaboration request needs your response.",
+            Some("https://app.example.com/sales/collab/1".to_string()),
+            now + Duration::hours(24),
+            now,
+        )
+        .expect("valid action queue entry");
+        repo.save(&entry).await.expect("save failed");
+
+        let found = repo.find_by_id(entry.id()).await.expect("find_by_id failed");
+        assert_eq!(found, Some(entry));
+
+        let missing = repo.find_by_id(Uuid::new_v4()).await.expect("find_by_id failed");
+        assert_eq!(missing, None);
     }
 
     #[tokio::test]

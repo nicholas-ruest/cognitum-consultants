@@ -282,6 +282,17 @@ pub trait NotificationRepository: Send + Sync {
         consultant_id: &str,
     ) -> Result<Vec<NotificationItem>, crate::RepoError>;
 
+    /// Looks up a single notification by id. **Added for the cross-instance
+    /// NOTIFY/LISTEN bridge** (ADR-014, PROMPT-32): a Postgres `NOTIFY`
+    /// payload carries only a lightweight pointer (`{kind, id}` — see
+    /// [`crate::EventNotifyPointer`]'s doc comment for why the payload isn't
+    /// the full aggregate), and every instance's listener bridge calls this
+    /// method to reconstruct the full [`NotificationItem`] before publishing
+    /// it to its own local [`crate::EventBus`]. `Ok(None)` (not an error)
+    /// when `id` is unknown — a listener receiving a NOTIFY for a row it
+    /// can't find is logged and skipped, not treated as a hard failure.
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<NotificationItem>, crate::RepoError>;
+
     /// Idempotent-ingestion insert (invariant 1): if a row already exists
     /// for `item.origin_key()`, this is a safe no-op that leaves the
     /// existing row untouched — see `persistence`'s

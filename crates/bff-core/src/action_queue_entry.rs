@@ -382,6 +382,12 @@ pub trait ActionQueueRepository: Send + Sync {
         consultant_id: &str,
     ) -> Result<Vec<ActionQueueEntry>, crate::RepoError>;
 
+    /// Looks up a single entry by id — same rationale and `Ok(None)`-on-
+    /// unknown-id contract as [`crate::NotificationRepository::find_by_id`];
+    /// see that method's doc comment for the full cross-instance NOTIFY/
+    /// LISTEN bridge context (ADR-014, PROMPT-32).
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<ActionQueueEntry>, crate::RepoError>;
+
     /// Idempotent-ingestion insert (invariant 1) — same no-op-on-conflict
     /// semantics as `NotificationRepository::save`; see that method's doc
     /// comment for the full rationale.

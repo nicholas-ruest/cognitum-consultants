@@ -22,7 +22,17 @@ serde_json = "1.0.150"
 # timestamps round-trip identically across crates.
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
 uuid = { workspace = true }
+# `event_notify::PgNotifyPublisher` (PROMPT-32, ADR-014) logs failed
+# `pg_notify` calls — best-effort, not propagated as an ingestion error (see
+# that module's doc comment) — matching every other gateway/repository
+# error-logging convention in this repo.
+tracing = { workspace = true }
 
 [dev-dependencies]
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+# `event_notify`'s tests (PROMPT-32) bound their `PgListener::recv().await`
+# with `tokio::time::timeout` so a broken NOTIFY/LISTEN round-trip fails
+# fast instead of hanging forever — needs the `time` feature on top of the
+# `rt-multi-thread`/`macros` already used by every other `#[tokio::test]` in
+# this crate.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

@@ -1,6 +1,7 @@
 mod correlation;
 mod dashboard;
 mod event_ingestion;
+mod event_notify_bridge;
 mod health;
 mod metrics;
 mod notifications_sse;
@@ -105,16 +106,31 @@ async fn main() {
         Arc::new(nexus_client::NexusSalesGateway::new(sales_command_transport));
 
     // PROMPT-29/30, ADR-010: the Postgres-backed `NotificationItem`/
-    // `ActionQueueEntry` repositories, and the in-process `EventBus` the
-    // polling loop below publishes freshly-ingested aggregates into.
-    // Constructed here (not inside the polling task) so they can also be
-    // shared via `AppState` — PROMPT-31's SSE endpoint subscribes to the
-    // same `event_bus` instance.
+    // `ActionQueueEntry` repositories, and the in-process `EventBus`
+    // PROMPT-31's SSE endpoint subscribes to. Constructed here (not inside
+    // either background task below) so they can also be shared via
+    // `AppState`.
+    //
+    // PROMPT-32/ADR-014: as of this unit, `event_bus` is no longer fed
+    // directly by ingestion — it's fed by `event_notify_bridge`'s Postgres
+    // `LISTEN` loop below, which is what makes this work across multiple
+    // `bff-api` instances (see that module's docs for the full pipeline).
     let notification_repository: Arc<dyn bff_core::NotificationRepository> =
         Arc::new(persistence::PgNotificationRepository::new(db_pool.clone()));
     let action_queue_repository: Arc<dyn bff_core::ActionQueueRepository> =
         Arc::new(persistence::PgActionQueueRepository::new(db_pool.clone()));
     let event_bus = Arc::new(bff_core::EventBus::default());
+
+    // PROMPT-32, ADR-014's recommended cross-instance SSE fan-out: the
+    // ingestion polling loop below publishes through this Postgres `NOTIFY`
+    // publisher instead of directly into `event_bus` — see
+    // `event_notify_bridge`'s module docs for why (every instance,
+    // including this one, learns about a fresh ingestion uniformly via its
+    // own `LISTEN` loop rather than ingestion reaching only this process's
+    // own subscribers directly).
+    let event_notify_publisher: Arc<dyn bff_core::EventPublisher> = Arc::new(
+        persistence::PgNotifyPublisher::new(db_pool.clone(), bff_core::EVENT_NOTIFY_CHANNEL),
+    );
 
     // Events-poll transport (PROMPT-30, ADR-011): `events/v1/poll` is a
     // read (idempotent query, no side effect), so per ADR-016 it gets the
@@ -139,8 +155,21 @@ async fn main() {
         events_transport,
         notification_repository.clone(),
         action_queue_repository.clone(),
-        event_bus.clone(),
+        event_notify_publisher,
         Duration::from_secs(cfg.event_poll_interval_seconds),
+    ));
+
+    // PROMPT-32, ADR-014: the other half of the bridge — a dedicated
+    // Postgres `LISTEN` connection that republishes every NOTIFY (from any
+    // instance's ingestion, including this one's) into this instance's own
+    // `event_bus`, which the SSE endpoint below subscribes to unchanged
+    // from PROMPT-31. See `event_notify_bridge`'s module docs for the full
+    // two-hop delivery path.
+    tokio::spawn(event_notify_bridge::run_listen_bridge(
+        cfg.database_url.clone(),
+        notification_repository.clone(),
+        action_queue_repository.clone(),
+        event_bus.clone(),
     ));
 
     let state = AppState {
@@ -174,7 +203,9 @@ async fn main() {
     // `notifications_sse::notifications_router` adds `GET
     // /api/notifications/stream` (PROMPT-31, ADR-011): the SSE push
     // endpoint consultants' browsers hold open, subscribed to the same
-    // `event_bus` instance the polling task above publishes into.
+    // `event_bus` instance the LISTEN bridge task above republishes into
+    // (PROMPT-32, ADR-014) — the polling task no longer publishes to it
+    // directly, see the comments above both background tasks.
     let api_router = Router::new()
         .route("/login/dev", post(session::login_dev))
         .merge(session::protected_router(state.clone()))

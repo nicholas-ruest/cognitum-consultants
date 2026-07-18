@@ -3,10 +3,19 @@
 //!
 //! `bff_core::event_ingestion` owns everything capability-agnostic — the
 //! `CapabilityEventReceived` envelope, the classify-and-route decision, the
-//! idempotent-ingestion service, and the `EventBus` it publishes into. This
-//! module owns the one part that belongs in `bff-api` instead (ADR-004):
-//! actually calling Nexus over `nexus_client::NexusTransport` and running
-//! the interval loop as a background tokio task.
+//! idempotent-ingestion service, and the `EventPublisher` trait it publishes
+//! a freshly-inserted aggregate to. This module owns the one part that
+//! belongs in `bff-api` instead (ADR-004): actually calling Nexus over
+//! `nexus_client::NexusTransport` and running the interval loop as a
+//! background tokio task.
+//!
+//! **PROMPT-32 (ADR-014) note**: production wiring (`main.rs`) hands
+//! [`run_polling_loop`] a `persistence::PgNotifyPublisher`, not a raw
+//! `bff_core::EventBus` — see [`run_polling_loop`]'s own doc comment and
+//! `event_notify_bridge` (this crate) for the other half of the
+//! cross-instance SSE fan-out bridge that makes this safe (every instance,
+//! including this one, still ends up feeding its own local `EventBus` via
+//! that bridge's `LISTEN` loop instead of losing delivery entirely).
 //!
 //! # Provisional endpoint (ADR-007 framing: Nexus's real contract is unknown)
 //! `GET events/v1/poll[?since=<cursor>]`, expected to return a bare JSON
@@ -41,8 +50,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bff_core::{
-    ingest_events, ActionQueueRepository, CapabilityEventReceived, EventBus, IngestionResult,
-    NotificationRepository,
+    ingest_events, ActionQueueRepository, CapabilityEventReceived, EventPublisher,
+    IngestionResult, NotificationRepository,
 };
 use chrono::{DateTime, Utc};
 use nexus_client::{NexusRequest, NexusTransport, NexusTransportError};
@@ -113,14 +122,14 @@ pub async fn poll_once(
     transport: &dyn NexusTransport,
     notification_repo: &dyn NotificationRepository,
     action_queue_repo: &dyn ActionQueueRepository,
-    event_bus: &EventBus,
+    publisher: &dyn EventPublisher,
     since: Option<DateTime<Utc>>,
 ) -> Result<PollOutcome, PollError> {
     let events = fetch_events(transport, since).await?;
     let events_fetched = events.len();
     let cursor = events.iter().map(|event| event.received_at).max().or(since);
 
-    let ingestion = ingest_events(events, notification_repo, action_queue_repo, event_bus).await;
+    let ingestion = ingest_events(events, notification_repo, action_queue_repo, publisher).await;
 
     Ok(PollOutcome { events_fetched, ingestion, cursor })
 }
@@ -131,17 +140,27 @@ pub async fn poll_once(
 /// (Nexus unreachable, bad response shape, etc.) is logged and does not
 /// crash the loop; the next cycle simply retries with the same `since`
 /// cursor as before the failed attempt.
+///
+/// `publisher` is a [`bff_core::EventPublisher`], not a raw
+/// [`bff_core::EventBus`] — in production (`main.rs`) this is a
+/// `persistence::PgNotifyPublisher` (PROMPT-32, ADR-014's cross-instance
+/// SSE fan-out): a fresh ingestion here NOTIFYs Postgres instead of writing
+/// straight into this process's own local `EventBus`, so every `bff-api`
+/// instance (including this one) learns about it uniformly via its own
+/// listener bridge (`event_notify_bridge::run_listen_bridge`), rather than
+/// this instance's ingestion reaching only its own in-process subscribers
+/// directly.
 pub async fn run_polling_loop(
     transport: Arc<dyn NexusTransport>,
     notification_repo: Arc<dyn NotificationRepository>,
     action_queue_repo: Arc<dyn ActionQueueRepository>,
-    event_bus: Arc<EventBus>,
+    publisher: Arc<dyn EventPublisher>,
     interval: Duration,
 ) -> ! {
     let mut cursor: Option<DateTime<Utc>> = None;
 
     loop {
-        match poll_once(transport.as_ref(), notification_repo.as_ref(), action_queue_repo.as_ref(), event_bus.as_ref(), cursor)
+        match poll_once(transport.as_ref(), notification_repo.as_ref(), action_queue_repo.as_ref(), publisher.as_ref(), cursor)
             .await
         {
             Ok(outcome) => {
@@ -167,7 +186,7 @@ pub async fn run_polling_loop(
 mod tests {
     use std::sync::Arc;
 
-    use bff_core::{ActionQueueRepository, NotificationRepository};
+    use bff_core::{ActionQueueRepository, EventBus, NotificationRepository};
     use nexus_client::ReqwestNexusTransport;
     use persistence::{PgActionQueueRepository, PgNotificationRepository};
     use testcontainers_modules::postgres::Postgres;
@@ -213,6 +232,13 @@ mod tests {
     /// (simulating the loop running twice) does not create a duplicate row
     /// — the idempotent-save safety net (layer 2, module docs) holding even
     /// though this test does not rely on the cursor to prevent the re-fetch.
+    ///
+    /// Passes a raw `EventBus` as `poll_once`'s `&dyn EventPublisher`
+    /// (`EventBus` implements that trait directly, PROMPT-32) — this test
+    /// is about the poll/ingest/dedup plumbing, not about which
+    /// `EventPublisher` production actually wires up (`persistence::
+    /// PgNotifyPublisher`, see `event_notify_bridge`'s own tests for the
+    /// real cross-instance NOTIFY/LISTEN proof).
     #[tokio::test]
     async fn polling_twice_against_an_identical_batch_ingests_exactly_once() {
         let (pool, _container) = migrated_pool().await;
