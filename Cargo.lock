@@ -245,17 +245,21 @@ dependencies = [
  "opentelemetry",
  "opentelemetry_sdk",
  "persistence",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",
  "testcontainers-modules",
+ "thiserror",
  "tokio",
  "tower",
  "tower-http",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "url",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]

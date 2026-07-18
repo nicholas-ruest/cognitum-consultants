@@ -370,6 +370,7 @@ mod tests {
             nexus_endpoint_url: "http://localhost:8080".to_owned(),
             environment: config::DEV_ENVIRONMENT.to_owned(),
             static_dir: None,
+            event_poll_interval_seconds: 5,
         }
     }
 
@@ -395,6 +396,10 @@ mod tests {
 
         let dashboard_repository: Arc<dyn DashboardConfigurationRepository> =
             Arc::new(PgDashboardConfigurationRepository::new(pool.clone()));
+        let notification_repository: Arc<dyn bff_core::NotificationRepository> =
+            Arc::new(persistence::PgNotificationRepository::new(pool.clone()));
+        let action_queue_repository: Arc<dyn bff_core::ActionQueueRepository> =
+            Arc::new(persistence::PgActionQueueRepository::new(pool.clone()));
 
         let sales_query_gateway: Arc<dyn SalesGateway> = mock_sales_gateway.clone();
         let sales_command_gateway: Arc<dyn SalesGateway> = mock_sales_gateway;
@@ -409,6 +414,9 @@ mod tests {
             dashboard_repository,
             sales_query_gateway,
             sales_command_gateway,
+            notification_repository,
+            action_queue_repository,
+            event_bus: Arc::new(bff_core::EventBus::default()),
         };
 
         let router = Router::new().nest("/api", sales_router(state.clone())).with_state(state);

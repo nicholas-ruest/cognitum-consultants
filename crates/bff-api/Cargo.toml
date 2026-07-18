@@ -49,6 +49,20 @@ axum-extra = { version = "0.12.6", features = ["cookie"] }
 # round-trips cleanly across the crate boundary.
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
 serde = { version = "1.0", features = ["derive"] }
+# `event_ingestion`'s polling loop (PROMPT-30) builds a `NexusRequest`
+# against a provisional `GET events/v1/poll?since=<cursor>` endpoint and
+# needs to name `reqwest::StatusCode` in its own error type — matches
+# `nexus-client`'s exact feature set so the type is identical across the
+# crate boundary.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Percent-encodes the `since` query parameter on the events-poll request,
+# matching `nexus_client::armor`'s `url::form_urlencoded::Serializer`
+# convention for building query strings.
+url = "2.5.8"
+# `event_ingestion::PollError` (PROMPT-30), matching every other gateway
+# error type in this repo (`nexus-client`'s `*GatewayError`s, `auth`'s
+# `SessionError`).
+thiserror = "2.0.18"
 
 [dev-dependencies]
 # ADR-013 layer 3 / ADR-010: Postgres-backed integration tests via testcontainers.
@@ -65,3 +79,7 @@ tower = { version = "0.5", features = ["util"] }
 # exercised for real; version/features match `persistence`'s own choice so
 # `sqlx::migrate!("../persistence/migrations")` resolves identically.
 sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "macros", "migrate"] }
+# `event_ingestion`'s polling-loop integration tests (PROMPT-30) mock
+# Nexus's provisional events-poll endpoint, matching `nexus-client`'s own
+# wiremock-based gateway tests (ADR-013 layer 2/3).
+wiremock = "0.6.5"

@@ -21,6 +21,7 @@ const LOG_LEVEL_ENV: &str = "RUST_LOG";
 const NEXUS_ENDPOINT_URL_ENV: &str = "NEXUS_ENDPOINT_URL";
 const APP_ENV_ENV: &str = "APP_ENV";
 const STATIC_DIR_ENV: &str = "STATIC_DIR";
+const EVENT_POLL_INTERVAL_SECONDS_ENV: &str = "EVENT_POLL_INTERVAL_SECONDS";
 
 const DEFAULT_DATABASE_URL: &str = "postgres://localhost:5432/cognitum_consultants";
 const DEFAULT_PORT: u16 = 3000;
@@ -37,6 +38,14 @@ const DEFAULT_APP_ENV: &str = "dev";
 /// The value [`Config::environment`] must equal for dev-only code paths
 /// (e.g. `auth`'s `dev-auth` stub, ADR-008) to be allowed to activate.
 pub const DEV_ENVIRONMENT: &str = "dev";
+/// Default interval, in seconds, between `bff-api`'s Nexus event-ingestion
+/// polls (PROMPT-30, ADR-011's "Nexus → BFF ingestion... via polling"
+/// decision). ADR-011 names "every 5 seconds" as the example interval; kept
+/// configurable via `EVENT_POLL_INTERVAL_SECONDS` (12-factor convention,
+/// matching every other tunable in this struct) rather than hardcoded, so
+/// it can be tightened/loosened per-environment without a code change once
+/// real polling latency/load data exists.
+const DEFAULT_EVENT_POLL_INTERVAL_SECONDS: u64 = 5;
 
 /// Application configuration, loaded once at startup from environment
 /// variables (falling back to dev defaults when a variable is unset).
@@ -84,6 +93,10 @@ pub struct Config {
     /// skipped rather than needing to fake one out. The container image
     /// (repo-root `Dockerfile`) sets `STATIC_DIR=/app/frontend-dist`.
     pub static_dir: Option<PathBuf>,
+    /// Interval, in seconds, between Nexus event-ingestion polls (PROMPT-30,
+    /// ADR-011). Sourced from `EVENT_POLL_INTERVAL_SECONDS`, defaulting to
+    /// [`DEFAULT_EVENT_POLL_INTERVAL_SECONDS`] when unset.
+    pub event_poll_interval_seconds: u64,
 }
 
 impl Config {
@@ -121,7 +134,22 @@ impl Config {
 
         let static_dir = get(STATIC_DIR_ENV).map(PathBuf::from);
 
-        Config { database_url, port, log_level, nexus_endpoint_url, environment, static_dir }
+        let event_poll_interval_seconds = match get(EVENT_POLL_INTERVAL_SECONDS_ENV) {
+            Some(raw) => raw.parse::<u64>().unwrap_or_else(|err| {
+                panic!("{EVENT_POLL_INTERVAL_SECONDS_ENV} must be a valid u64, got {raw:?}: {err}")
+            }),
+            None => DEFAULT_EVENT_POLL_INTERVAL_SECONDS,
+        };
+
+        Config {
+            database_url,
+            port,
+            log_level,
+            nexus_endpoint_url,
+            environment,
+            static_dir,
+            event_poll_interval_seconds,
+        }
     }
 
     /// True when this config's [`environment`](Config::environment) is
@@ -169,6 +197,7 @@ mod tests {
         assert_eq!(config.environment, DEFAULT_APP_ENV);
         assert!(config.is_dev());
         assert_eq!(config.static_dir, None);
+        assert_eq!(config.event_poll_interval_seconds, DEFAULT_EVENT_POLL_INTERVAL_SECONDS);
     }
 
     #[test]
@@ -180,6 +209,7 @@ mod tests {
             (NEXUS_ENDPOINT_URL_ENV, "https://nexus.example.com"),
             (APP_ENV_ENV, "prod"),
             (STATIC_DIR_ENV, "/app/frontend-dist"),
+            (EVENT_POLL_INTERVAL_SECONDS_ENV, "10"),
         ]);
 
         let config = Config::from_env(lookup(vars));
@@ -191,12 +221,20 @@ mod tests {
         assert_eq!(config.environment, "prod");
         assert!(!config.is_dev());
         assert_eq!(config.static_dir, Some(PathBuf::from("/app/frontend-dist")));
+        assert_eq!(config.event_poll_interval_seconds, 10);
     }
 
     #[test]
     #[should_panic(expected = "PORT must be a valid u16")]
     fn invalid_port_panics() {
         let vars = HashMap::from([(PORT_ENV, "not-a-number")]);
+        Config::from_env(lookup(vars));
+    }
+
+    #[test]
+    #[should_panic(expected = "EVENT_POLL_INTERVAL_SECONDS must be a valid u64")]
+    fn invalid_event_poll_interval_seconds_panics() {
+        let vars = HashMap::from([(EVENT_POLL_INTERVAL_SECONDS_ENV, "not-a-number")]);
         Config::from_env(lookup(vars));
     }
 
@@ -209,6 +247,7 @@ mod tests {
             nexus_endpoint_url: DEFAULT_NEXUS_ENDPOINT_URL.to_owned(),
             environment: DEFAULT_APP_ENV.to_owned(),
             static_dir: None,
+            event_poll_interval_seconds: DEFAULT_EVENT_POLL_INTERVAL_SECONDS,
         };
 
         assert_eq!(config.redacted_database_url(), "postgres://***@db.internal:5432/prod");
@@ -223,6 +262,7 @@ mod tests {
             nexus_endpoint_url: DEFAULT_NEXUS_ENDPOINT_URL.to_owned(),
             environment: DEFAULT_APP_ENV.to_owned(),
             static_dir: None,
+            event_poll_interval_seconds: DEFAULT_EVENT_POLL_INTERVAL_SECONDS,
         };
 
         assert_eq!(config.redacted_database_url(), DEFAULT_DATABASE_URL);

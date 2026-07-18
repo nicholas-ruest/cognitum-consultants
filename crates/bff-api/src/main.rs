@@ -1,5 +1,6 @@
 mod correlation;
 mod dashboard;
+mod event_ingestion;
 mod health;
 mod metrics;
 mod permissions;
@@ -8,6 +9,7 @@ mod session;
 mod telemetry;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::routing::{get, post};
 use axum::{middleware, Router};
@@ -101,6 +103,45 @@ async fn main() {
     let sales_command_gateway: Arc<dyn nexus_client::SalesGateway> =
         Arc::new(nexus_client::NexusSalesGateway::new(sales_command_transport));
 
+    // PROMPT-29/30, ADR-010: the Postgres-backed `NotificationItem`/
+    // `ActionQueueEntry` repositories, and the in-process `EventBus` the
+    // polling loop below publishes freshly-ingested aggregates into.
+    // Constructed here (not inside the polling task) so they can also be
+    // shared via `AppState` — PROMPT-31's SSE endpoint subscribes to the
+    // same `event_bus` instance.
+    let notification_repository: Arc<dyn bff_core::NotificationRepository> =
+        Arc::new(persistence::PgNotificationRepository::new(db_pool.clone()));
+    let action_queue_repository: Arc<dyn bff_core::ActionQueueRepository> =
+        Arc::new(persistence::PgActionQueueRepository::new(db_pool.clone()));
+    let event_bus = Arc::new(bff_core::EventBus::default());
+
+    // Events-poll transport (PROMPT-30, ADR-011): `events/v1/poll` is a
+    // read (idempotent query, no side effect), so per ADR-016 it gets the
+    // read-timeout budget wrapped in `RetryingTransport`, same convention
+    // as `armor_transport` above and `sales_query_transport`'s read-side
+    // counterpart.
+    let events_base_transport = nexus_client::ReqwestNexusTransport::new(&cfg.nexus_endpoint_url)
+        .unwrap_or_else(|err| panic!("invalid nexus_endpoint_url {:?}: {err}", cfg.nexus_endpoint_url));
+    let events_timeout_transport =
+        nexus_client::TimeoutTransport::new(Arc::new(events_base_transport), nexus_client::DEFAULT_READ_TIMEOUT);
+    let events_transport: Arc<dyn nexus_client::NexusTransport> =
+        Arc::new(nexus_client::RetryingTransport::with_default_retries(Arc::new(events_timeout_transport)));
+
+    // Background polling task (PROMPT-30, ADR-011's "Nexus → BFF ingestion
+    // via polling" decision): runs for the lifetime of the process, never
+    // awaited here. Graceful shutdown (ADR-014) drains in-flight HTTP
+    // requests via `with_graceful_shutdown` below; this task is simply
+    // dropped when the process exits, which is acceptable since a poll
+    // cycle has no partially-committed state of its own (`ingest_events`'s
+    // per-event saves are already individually atomic).
+    tokio::spawn(event_ingestion::run_polling_loop(
+        events_transport,
+        notification_repository.clone(),
+        action_queue_repository.clone(),
+        event_bus.clone(),
+        Duration::from_secs(cfg.event_poll_interval_seconds),
+    ));
+
     let state = AppState {
         db_pool,
         session_provider,
@@ -115,6 +156,9 @@ async fn main() {
         dashboard_repository,
         sales_query_gateway,
         sales_command_gateway,
+        notification_repository,
+        action_queue_repository,
+        event_bus,
     };
 
     // `/api/login/dev` is dev-only in practice (see `session` module docs)

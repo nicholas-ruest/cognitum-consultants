@@ -28,6 +28,16 @@ serde = { version = "1.0", features = ["derive"] }
 # ADR-004).
 uuid = { workspace = true }
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
+# `event_ingestion::EventBus` (PROMPT-30) is a thin wrapper over
+# `tokio::sync::broadcast` — the minimal in-process pub/sub primitive
+# `ingest_events` publishes freshly-inserted aggregates into, for PROMPT-31's
+# SSE endpoint to consume from. Only the `sync` feature is needed here; the
+# runtime itself is provided by whichever binary (`bff-api`) actually drives
+# the polling loop.
+tokio = { workspace = true, features = ["sync"] }
+# `CapabilityEventReceived` (PROMPT-30) also derives `Deserialize` off the
+# `serde` dependency above — this is the shape Nexus's polling endpoint
+# returns and `bff-api` decodes a JSON response body into.
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

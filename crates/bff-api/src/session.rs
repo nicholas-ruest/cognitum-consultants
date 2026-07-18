@@ -91,6 +91,25 @@ pub struct AppState {
     /// [`nexus_client::SalesGateway`] trait — see `crate::sales` module
     /// docs.
     pub sales_command_gateway: Arc<dyn nexus_client::SalesGateway>,
+    /// Repository for [`bff_core::NotificationItem`] (PROMPT-29/30,
+    /// ADR-010). Not yet read by any handler ([`crate::event_ingestion`]'s
+    /// polling loop is the only current writer, via `main`'s spawned
+    /// background task) — kept on `AppState` (rather than only inside the
+    /// polling task) so PROMPT-31's `GET /api/notifications/stream` SSE
+    /// endpoint and any future `POST /api/notifications/*` action routes
+    /// can share the same repository instance.
+    pub notification_repository: Arc<dyn bff_core::NotificationRepository>,
+    /// Repository for [`bff_core::ActionQueueEntry`] (PROMPT-29/30,
+    /// ADR-010). Same "not yet read by a handler, shared for PROMPT-31"
+    /// rationale as [`Self::notification_repository`].
+    pub action_queue_repository: Arc<dyn bff_core::ActionQueueRepository>,
+    /// In-process pub/sub bus (PROMPT-30, ADR-011) that
+    /// [`crate::event_ingestion::run_polling_loop`] publishes freshly-
+    /// ingested notifications/action-queue entries into. `Arc`-wrapped so
+    /// the same bus instance is shared between the background polling task
+    /// and (in PROMPT-31) every `GET /api/notifications/stream` SSE
+    /// handler's `subscribe()` call.
+    pub event_bus: Arc<bff_core::EventBus>,
 }
 
 impl FromRef<AppState> for PrometheusHandle {

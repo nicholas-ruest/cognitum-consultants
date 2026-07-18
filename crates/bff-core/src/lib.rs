@@ -8,6 +8,7 @@
 mod action_queue_entry;
 mod consultant_preferences;
 mod dashboard_configuration;
+mod event_ingestion;
 mod notification_item;
 mod preference_key;
 mod save_outcome;
@@ -23,6 +24,11 @@ pub use consultant_preferences::{
 pub use dashboard_configuration::{
     CardPlacement, DashboardConfiguration, DashboardConfigurationError,
     DashboardConfigurationRepository, DEFAULT_CARD_MODULE_IDS,
+};
+pub use event_ingestion::{
+    classify, ingest_events, CapabilityEventReceived, EventBus, EventClassification,
+    IngestedEvent, IngestionOutcome, IngestionResult, DEFAULT_ACTION_QUEUE_ENTRY_TTL_HOURS,
+    DEFAULT_EVENT_BUS_CAPACITY,
 };
 pub use notification_item::{
     NotificationItem, NotificationItemError, NotificationRepository, ParseReadStateError,
