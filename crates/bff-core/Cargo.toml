@@ -6,4 +6,22 @@ publish.workspace = true
 
 [dependencies]
 nexus-client = { path = "../nexus-client" }
-persistence = { path = "../persistence" }
+# `ConsultantPreferencesRepository` (PROMPT-20) needs to be object-safe
+# (`Arc<dyn ConsultantPreferencesRepository>` in bff-api's Axum state) which
+# native async-fn-in-traits does not support; matches auth's SessionProvider
+# convention (PROMPT-10).
+async-trait = "0.1.89"
+thiserror = "2.0.18"
+# `PreferenceKey`/`ConsultantPreferences` derive `Serialize`/`Deserialize` so
+# `persistence` can round-trip them through the ADR-010 JSONB column without
+# bff-core depending on a specific database crate (ADR-004) — note
+# persistence depends on bff-core (to implement its repository trait), not
+# the other way around, so the earlier stub dependency on `persistence` here
+# has been removed to avoid a crate dependency cycle.
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+# Only used in tests, to prove that an unknown preference key fails to parse
+# at the JSON deserialization boundary (not just via Rust's type system).
+serde_json = "1.0.150"

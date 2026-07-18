@@ -5,10 +5,10 @@ Postgres access for this repo's own aggregates (ADR-010). This crate owns:
 - The `sqlx::PgPool` connection pool (`create_pool`, used by `bff-api`'s
   `main.rs` on startup).
 - The `sqlx-cli` migrations directory (`migrations/`).
-- Repository trait implementations for `DashboardConfiguration`,
-  `ConsultantPreferences`, notification/action-queue state, etc. — **not
-  yet implemented** as of U09; this unit only stands up the connection and
-  tooling.
+- Repository trait implementations for this repo's own aggregates.
+  `PgConsultantPreferencesRepository` (U20/PROMPT-20) is the first;
+  `DashboardConfiguration`, notification/action-queue state, etc. land in
+  later units.
 
 ## Prerequisites
 
@@ -59,8 +59,8 @@ sqlx migrate info --source crates/persistence/migrations
 ```
 
 Per ADR-010, migrations are run automatically at `bff-api` startup in
-non-production environments (not yet wired — no migrations exist to run as
-of U09) and via an explicit CI/CD deploy step in production.
+non-production environments (not yet wired) and via an explicit CI/CD
+deploy step in production.
 
 ### Adding a new migration
 
@@ -69,8 +69,9 @@ cargo sqlx migrate add -r --source crates/persistence/migrations <description>
 ```
 
 `-r` generates a reversible pair (`<timestamp>_<description>.up.sql` /
-`.down.sql`). See `migrations/README.md` for the per-aggregate convention —
-the first real migration is expected in U20.
+`.down.sql`). See `migrations/README.md` for the per-aggregate convention.
+`20260718002751_consultant_preferences` (U20/PROMPT-20) is the first real
+migration.
 
 ## Offline compile-time query checking
 
@@ -90,19 +91,19 @@ DATABASE_URL=postgres://... cargo sqlx prepare
 SQLX_OFFLINE=true cargo check
 ```
 
-**Status as of U09: not yet meaningfully exercised.** There are zero
-`query!`/`query_as!`/`query_scalar!` invocations anywhere in this crate (no
-aggregate tables exist yet — see `migrations/README.md`), so there is no
-query metadata to cache: running `cargo sqlx prepare` today produces an
-empty `.sqlx/` directory (verified manually; not committed, since an
-all-empty directory carries no information and git doesn't track empty
-directories anyway). `cargo check`/`cargo build` already succeed with no
-`DATABASE_URL` and no `SQLX_OFFLINE` set, because there is nothing for the
-macros to check. This section documents the convention so it's ready to use
-the moment U20 adds the first real query — at that point, run `cargo sqlx
-prepare` as shown above, commit `.sqlx/`, and set `SQLX_OFFLINE=true` in CI
-(or rely on the cached metadata being preferred automatically when
-`DATABASE_URL` is unset).
+**Status as of U20: exercised.** `consultant_preferences_repository.rs`'s
+`query!`/`query_as!` calls are the first real use of this mechanism in the
+workspace. `cargo sqlx prepare --workspace` (run once, with a throwaway
+`testcontainers`/Docker Postgres reachable and the
+`consultant_preferences` migration applied) wrote the query metadata to
+`.sqlx/` **at the workspace root** (not inside this crate — `--workspace`
+aggregates every member's queries into one cache) and that directory is
+committed. Both `SQLX_OFFLINE=true cargo check -p persistence` and plain
+`cargo check`/`cargo test` with no `DATABASE_URL` set at all succeed using
+that committed cache — sqlx prefers the on-disk cache automatically when no
+live database is configured. Re-run `cargo sqlx prepare --workspace` (with
+`DATABASE_URL` pointed at a real, migrated Postgres) and re-commit `.sqlx/`
+whenever a `query!`/`query_as!` invocation changes.
 
 ## Connection pool defaults
 

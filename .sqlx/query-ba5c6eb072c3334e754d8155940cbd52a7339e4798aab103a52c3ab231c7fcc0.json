@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO consultant_preferences (consultant_id, preferences, updated_at)\n            VALUES ($1, $2, now())\n            ON CONFLICT (consultant_id)\n            DO UPDATE SET preferences = EXCLUDED.preferences, updated_at = now()\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ba5c6eb072c3334e754d8155940cbd52a7339e4798aab103a52c3ab231c7fcc0"
+}

@@ -1,11 +1,15 @@
 //! persistence: repository trait implementations over the ADR-010 datastore.
 //!
-//! U09 (this unit) stands up the Postgres connection pool and the
-//! `sqlx-cli` migration-tooling convention only — no concrete aggregate
-//! tables or repository trait implementations exist yet (those land
-//! starting at U11/U20, per `.plans/ddd/consultant-experience-context.md`
-//! §1.4/§2.4 at the repo root). See `README.md` for the local-dev / CI
-//! migration and offline-query-check workflow.
+//! U09 stood up the Postgres connection pool and the `sqlx-cli`
+//! migration-tooling convention. U20 (PROMPT-20) adds the first concrete
+//! repository implementation, [`PgConsultantPreferencesRepository`], for
+//! `bff_core::ConsultantPreferencesRepository`
+//! (`.plans/ddd/consultant-experience-context.md` §1.4). See `README.md`
+//! for the local-dev / CI migration and offline-query-check workflow.
+
+mod consultant_preferences_repository;
+
+pub use consultant_preferences_repository::PgConsultantPreferencesRepository;
 
 use std::time::Duration;
 

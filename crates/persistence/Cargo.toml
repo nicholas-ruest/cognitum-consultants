@@ -5,7 +5,17 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "macros", "migrate", "uuid", "chrono"] }
+# "json" enables sqlx's `Json<T>` wrapper (`consultant_preferences.rs`,
+# PROMPT-20), used to round-trip `HashMap<PreferenceKey, String>` through
+# the `consultant_preferences.preferences` JSONB column via `query_as!`.
+sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "macros", "migrate", "uuid", "chrono", "json"] }
+# `bff-core` defines the `ConsultantPreferencesRepository` trait and the
+# `ConsultantPreferences`/`PreferenceKey` types this crate implements
+# storage for (ADR-004: repository traits live in bff-core, persistence
+# implements them — not the other way around).
+bff-core = { path = "../bff-core" }
+async-trait = "0.1.89"
+serde_json = "1.0.150"
 
 [dev-dependencies]
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
