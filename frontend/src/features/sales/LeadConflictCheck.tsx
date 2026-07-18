@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { TextInput } from '../../components/TextInput'
-import { Button } from '../../components/Button'
-import { Alert } from '../../components/Alert'
-import type { AlertVariant } from '../../components/Alert'
+import { TextInput, Button, Alert } from '@cognitum/design-system'
+import type { AlertVariant } from '@cognitum/design-system'
+import { CapabilityForm } from '@cognitum/dashboard-components'
 
 /**
  * PROMPT-26: Sales lead-conflict-warning flow, the Phase 2 reference
@@ -169,17 +168,19 @@ export function LeadConflictCheck() {
 
   return (
     <div className="flex flex-col gap-4">
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
+      <CapabilityForm
+        onSubmit={handleSubmit}
+        submitLabel="Check for Conflicts"
+        pendingLabel="Checking…"
+        isPending={checkMutation.isPending}
+      >
         <TextInput
           label="Company Name"
           value={companyName}
           onChange={(event) => setCompanyName(event.target.value)}
           required
         />
-        <Button type="submit" disabled={checkMutation.isPending}>
-          {checkMutation.isPending ? 'Checking…' : 'Check for Conflicts'}
-        </Button>
-      </form>
+      </CapabilityForm>
 
       {checkMutation.isError ? (
         <Alert variant="error">Failed to check this company. Please try again.</Alert>

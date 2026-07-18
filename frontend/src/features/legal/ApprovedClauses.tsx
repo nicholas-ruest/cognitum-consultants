@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { Alert } from '../../components/Alert'
+import { Alert } from '@cognitum/design-system'
+import { ListDetailPanel } from '@cognitum/dashboard-components'
 import { queryKeys } from '../../lib/queryKeys'
 import { useSession } from '../../lib/SessionContext'
 
@@ -93,17 +94,20 @@ export function ApprovedClauses({ context }: ApprovedClausesProps) {
       {clauses.length === 0 ? (
         <p className="mt-1 text-xs text-gray-500">No approved clauses found.</p>
       ) : (
-        <ul className="mt-1 flex flex-col gap-2">
-          {clauses.map((clause) => (
-            <li key={clause.clause_id} className="rounded border border-gray-200 p-3">
+        <ListDetailPanel
+          items={clauses}
+          getKey={(clause) => clause.clause_id}
+          listClassName="mt-1 flex flex-col gap-2"
+          renderRow={(clause) => (
+            <div className="rounded border border-gray-200 p-3">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-gray-900">{clause.title}</p>
                 <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{clause.policy_reference}</span>
               </div>
               <p className="mt-1 text-xs text-gray-700">{clause.approved_text}</p>
-            </li>
-          ))}
-        </ul>
+            </div>
+          )}
+        />
       )}
     </section>
   )

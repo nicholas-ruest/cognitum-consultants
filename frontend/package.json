@@ -12,6 +12,8 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@cognitum/dashboard-components": "^0.1.0",
+    "@cognitum/design-system": "^0.1.0",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.101.2",
     "react": "^19.2.7",

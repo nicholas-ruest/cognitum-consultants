@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert } from '../../components/Alert'
-import { Button } from '../../components/Button'
-import { TextInput } from '../../components/TextInput'
+import { Alert, Button, TextInput } from '@cognitum/design-system'
+import { CapabilityForm, ListDetailPanel } from '@cognitum/dashboard-components'
 import { ApprovedClauses } from '../legal/ApprovedClauses'
 import { queryKeys } from '../../lib/queryKeys'
 import { useSession } from '../../lib/SessionContext'
@@ -178,7 +177,6 @@ export function ProposalWorkspace() {
   }
 
   const proposals = proposalsQuery.data ?? []
-  const selectedProposal = proposals.find((proposal) => proposal.proposal_id === selectedProposalId) ?? null
 
   if (proposalsQuery.isPending) {
     return <p className="text-sm text-gray-500">Loading proposals…</p>
@@ -190,49 +188,52 @@ export function ProposalWorkspace() {
 
   return (
     <div className="flex flex-col gap-4">
-      {createMutation.isError ? <Alert variant="error">Failed to start a new proposal. Please try again.</Alert> : null}
-
-      <form onSubmit={handleCreateSubmit} className="flex flex-col gap-2">
+      <CapabilityForm
+        alerts={createMutation.isError ? [{ variant: 'error', message: 'Failed to start a new proposal. Please try again.' }] : []}
+        onSubmit={handleCreateSubmit}
+        submitLabel="Start Proposal"
+        pendingLabel="Starting…"
+        isPending={createMutation.isPending}
+        className="flex flex-col gap-2"
+      >
         <TextInput
           label="Origin Reference"
           value={originReference}
           onChange={(event) => setOriginReference(event.target.value)}
           placeholder="e.g. a Sales company/lead id"
         />
-        <Button type="submit" disabled={createMutation.isPending}>
-          {createMutation.isPending ? 'Starting…' : 'Start Proposal'}
-        </Button>
-      </form>
+      </CapabilityForm>
 
       {proposals.length === 0 ? (
         <p className="text-xs text-gray-500">No proposals yet.</p>
       ) : (
-        <ul className="flex flex-col gap-2">
-          {proposals.map((proposal) => (
-            <li key={proposal.proposal_id}>
-              <button
-                type="button"
-                onClick={() => setSelectedProposalId(proposal.proposal_id)}
-                className="w-full rounded border border-gray-200 p-3 text-left hover:bg-gray-50"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-semibold text-gray-900">{proposal.title}</p>
-                  <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{proposal.status}</span>
-                </div>
-                <p className="text-xs text-gray-500">Stage: {proposal.stage}</p>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {selectedProposal ? (
-        <ProposalDetail
-          proposal={selectedProposal}
-          onAction={(action) => actionMutation.mutate({ proposalId: selectedProposal.proposal_id, action })}
-          isActionPending={actionMutation.isPending}
+        <ListDetailPanel
+          items={proposals}
+          getKey={(proposal) => proposal.proposal_id}
+          selectedKey={selectedProposalId}
+          onSelectedKeyChange={setSelectedProposalId}
+          renderRow={(proposal, { select }) => (
+            <button
+              type="button"
+              onClick={select}
+              className="w-full rounded border border-gray-200 p-3 text-left hover:bg-gray-50"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-gray-900">{proposal.title}</p>
+                <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{proposal.status}</span>
+              </div>
+              <p className="text-xs text-gray-500">Stage: {proposal.stage}</p>
+            </button>
+          )}
+          renderDetail={(proposal) => (
+            <ProposalDetail
+              proposal={proposal}
+              onAction={(action) => actionMutation.mutate({ proposalId: proposal.proposal_id, action })}
+              isActionPending={actionMutation.isPending}
+            />
+          )}
         />
-      ) : null}
+      )}
     </div>
   )
 }
@@ -245,7 +246,7 @@ interface ProposalDetailProps {
 
 function ProposalDetail({ proposal, onAction, isActionPending }: ProposalDetailProps) {
   return (
-    <div className="rounded border border-gray-300 p-3">
+    <div>
       <h4 className="text-sm font-semibold text-gray-900">{proposal.title}</h4>
       <p className="text-xs text-gray-500">
         Status: {proposal.status} · Stage: {proposal.stage}

@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Alert } from '../../components/Alert'
-import { Button } from '../../components/Button'
+import { Alert, Button } from '@cognitum/design-system'
+import { ListDetailPanel } from '@cognitum/dashboard-components'
 import { actionQueueQueryKey } from '../../lib/queryKeys'
 import { useSession } from '../../lib/SessionContext'
 import type { ActionQueueEntry as ActionQueueEntryData } from '../../lib/useActionQueueQuery'
@@ -63,16 +63,18 @@ export function ActionQueue() {
   }
 
   return (
-    <ul className="flex flex-col gap-3">
-      {entries.map((entry) => (
+    <ListDetailPanel
+      items={entries}
+      getKey={(entry) => entry.id}
+      listClassName="flex flex-col gap-3"
+      renderRow={(entry) => (
         <ActionQueueRow
-          key={entry.id}
           entry={entry}
           onStart={() => startMutation.mutate(entry.id)}
           isStarting={startMutation.isPending && startMutation.variables === entry.id}
         />
-      ))}
-    </ul>
+      )}
+    />
   )
 }
 
@@ -84,7 +86,7 @@ interface ActionQueueRowProps {
 
 function ActionQueueRow({ entry, onStart, isStarting }: ActionQueueRowProps) {
   return (
-    <li className="rounded border border-gray-200 p-3">
+    <div className="rounded border border-gray-200 p-3">
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm font-semibold text-gray-900">{entry.title}</p>
         <StateBadge state={entry.action_state} />
@@ -114,7 +116,7 @@ function ActionQueueRow({ entry, onStart, isStarting }: ActionQueueRowProps) {
           </Button>
         </div>
       ) : null}
-    </li>
+    </div>
   )
 }
 

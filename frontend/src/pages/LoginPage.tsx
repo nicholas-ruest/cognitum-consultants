@@ -1,9 +1,6 @@
 import type { FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Alert } from '../components/Alert'
-import { Button } from '../components/Button'
-import { Card } from '../components/Card'
-import { TextInput } from '../components/TextInput'
+import { Alert, Button, Card, TextInput } from '@cognitum/design-system'
 
 /**
  * PROMPT-18 login page.

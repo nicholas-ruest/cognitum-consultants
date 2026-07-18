@@ -1,6 +1,6 @@
-import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Alert } from '../../components/Alert'
+import { Alert } from '@cognitum/design-system'
+import { ListDetailPanel } from '@cognitum/dashboard-components'
 import { queryKeys } from '../../lib/queryKeys'
 import { useSession } from '../../lib/SessionContext'
 
@@ -59,8 +59,6 @@ export function ProductCatalog() {
   const session = useSession()
   const consultantId = session.status === 'authenticated' ? session.consultantId : undefined
 
-  const [selectedProductId, setSelectedProductId] = useState<string | null>(null)
-
   const catalogQuery = useQuery({
     queryKey: queryKeys.products.catalog(consultantId ?? ''),
     queryFn: fetchProductCatalog,
@@ -78,33 +76,29 @@ export function ProductCatalog() {
   }
 
   const cards = catalogQuery.data ?? []
-  const selectedCard = cards.find((card) => card.product_id === selectedProductId) ?? null
 
   if (cards.length === 0) {
     return <p className="text-xs text-gray-500">No approved products yet.</p>
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <ul className="flex flex-col gap-2">
-        {cards.map((card) => (
-          <li key={card.product_id}>
-            <button
-              type="button"
-              onClick={() => setSelectedProductId(card.product_id)}
-              className="w-full rounded border border-gray-200 p-3 text-left hover:bg-gray-50"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-gray-900">{card.name}</p>
-                <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{card.pricing_guidance}</span>
-              </div>
-            </button>
-          </li>
-        ))}
-      </ul>
-
-      {selectedCard ? <ProductReferenceDetail card={selectedCard} /> : null}
-    </div>
+    <ListDetailPanel
+      items={cards}
+      getKey={(card) => card.product_id}
+      renderRow={(card, { select }) => (
+        <button
+          type="button"
+          onClick={select}
+          className="w-full rounded border border-gray-200 p-3 text-left hover:bg-gray-50"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-gray-900">{card.name}</p>
+            <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{card.pricing_guidance}</span>
+          </div>
+        </button>
+      )}
+      renderDetail={(card) => <ProductReferenceDetail card={card} />}
+    />
   )
 }
 
@@ -114,7 +108,7 @@ interface ProductReferenceDetailProps {
 
 function ProductReferenceDetail({ card }: ProductReferenceDetailProps) {
   return (
-    <div className="rounded border border-gray-300 p-3">
+    <div>
       <h4 className="text-sm font-semibold text-gray-900">{card.name}</h4>
       <p className="text-xs text-gray-500">Pricing: {card.pricing_guidance}</p>
       <p className="mt-1 text-xs text-gray-700">{card.packaging_summary}</p>

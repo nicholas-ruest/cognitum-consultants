@@ -1,7 +1,6 @@
-import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert } from '../../components/Alert'
-import { Button } from '../../components/Button'
+import { Alert, Button } from '@cognitum/design-system'
+import { ListDetailPanel } from '@cognitum/dashboard-components'
 import { queryKeys } from '../../lib/queryKeys'
 import { useSession } from '../../lib/SessionContext'
 
@@ -91,7 +90,6 @@ export function ExecutionWorkspace() {
   const session = useSession()
   const consultantId = session.status === 'authenticated' ? session.consultantId : undefined
 
-  const [selectedEngagementId, setSelectedEngagementId] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
   const engagementsQuery = useQuery({
@@ -123,7 +121,6 @@ export function ExecutionWorkspace() {
   }
 
   const engagements = engagementsQuery.data ?? []
-  const selectedEngagement = engagements.find((engagement) => engagement.engagement_id === selectedEngagementId) ?? null
 
   if (engagements.length === 0) {
     return <p className="text-xs text-gray-500">No assigned engagements yet.</p>
@@ -135,33 +132,32 @@ export function ExecutionWorkspace() {
         <Alert variant="error">Failed to request task completion. Please try again.</Alert>
       ) : null}
 
-      <ul className="flex flex-col gap-2">
-        {engagements.map((engagement) => (
-          <li key={engagement.engagement_id}>
-            <button
-              type="button"
-              onClick={() => setSelectedEngagementId(engagement.engagement_id)}
-              className="w-full rounded border border-gray-200 p-3 text-left hover:bg-gray-50"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-gray-900">{engagement.engagement_id}</p>
-                <span className={`rounded px-2 py-0.5 text-xs ${deliveryStatusBadgeClass(engagement.delivery_status)}`}>
-                  {engagement.delivery_status}
-                </span>
-              </div>
-            </button>
-          </li>
-        ))}
-      </ul>
-
-      {selectedEngagement ? (
-        <EngagementDetail
-          engagement={selectedEngagement}
-          onRequestCompletion={(taskId) => completionMutation.mutate(taskId)}
-          isRequestingCompletion={completionMutation.isPending}
-          requestingTaskId={completionMutation.isPending ? completionMutation.variables : undefined}
-        />
-      ) : null}
+      <ListDetailPanel
+        items={engagements}
+        getKey={(engagement) => engagement.engagement_id}
+        renderRow={(engagement, { select }) => (
+          <button
+            type="button"
+            onClick={select}
+            className="w-full rounded border border-gray-200 p-3 text-left hover:bg-gray-50"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-gray-900">{engagement.engagement_id}</p>
+              <span className={`rounded px-2 py-0.5 text-xs ${deliveryStatusBadgeClass(engagement.delivery_status)}`}>
+                {engagement.delivery_status}
+              </span>
+            </div>
+          </button>
+        )}
+        renderDetail={(engagement) => (
+          <EngagementDetail
+            engagement={engagement}
+            onRequestCompletion={(taskId) => completionMutation.mutate(taskId)}
+            isRequestingCompletion={completionMutation.isPending}
+            requestingTaskId={completionMutation.isPending ? completionMutation.variables : undefined}
+          />
+        )}
+      />
     </div>
   )
 }
@@ -175,7 +171,7 @@ interface EngagementDetailProps {
 
 function EngagementDetail({ engagement, onRequestCompletion, isRequestingCompletion, requestingTaskId }: EngagementDetailProps) {
   return (
-    <div className="rounded border border-gray-300 p-3">
+    <div>
       <h4 className="text-sm font-semibold text-gray-900">{engagement.engagement_id}</h4>
       <p className="text-xs text-gray-500">
         Delivery status:{' '}

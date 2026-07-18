@@ -1,6 +1,6 @@
-import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Alert } from '../../components/Alert'
+import { Alert } from '@cognitum/design-system'
+import { ListDetailPanel } from '@cognitum/dashboard-components'
 import { queryKeys } from '../../lib/queryKeys'
 import { useSession } from '../../lib/SessionContext'
 
@@ -61,8 +61,6 @@ export function CustomerContextList() {
   const session = useSession()
   const consultantId = session.status === 'authenticated' ? session.consultantId : undefined
 
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
-
   const contextsQuery = useQuery({
     queryKey: queryKeys.customer.assigned(consultantId ?? ''),
     queryFn: fetchAssignedCustomers,
@@ -78,35 +76,31 @@ export function CustomerContextList() {
   }
 
   const contexts = contextsQuery.data ?? []
-  const selectedContext = contexts.find((context) => context.customer_id === selectedCustomerId) ?? null
 
   if (contexts.length === 0) {
     return <p className="text-xs text-gray-500">No assigned customers yet.</p>
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <ul className="flex flex-col gap-2">
-        {contexts.map((context) => (
-          <li key={context.customer_id}>
-            <button
-              type="button"
-              onClick={() => setSelectedCustomerId(context.customer_id)}
-              className="w-full rounded border border-gray-200 p-3 text-left hover:bg-gray-50"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-gray-900">{context.name}</p>
-                <span className={`rounded px-2 py-0.5 text-xs ${healthBadgeClass(context.health_status)}`}>
-                  {context.health_status}
-                </span>
-              </div>
-            </button>
-          </li>
-        ))}
-      </ul>
-
-      {selectedContext ? <CustomerContextDetail context={selectedContext} /> : null}
-    </div>
+    <ListDetailPanel
+      items={contexts}
+      getKey={(context) => context.customer_id}
+      renderRow={(context, { select }) => (
+        <button
+          type="button"
+          onClick={select}
+          className="w-full rounded border border-gray-200 p-3 text-left hover:bg-gray-50"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-gray-900">{context.name}</p>
+            <span className={`rounded px-2 py-0.5 text-xs ${healthBadgeClass(context.health_status)}`}>
+              {context.health_status}
+            </span>
+          </div>
+        </button>
+      )}
+      renderDetail={(context) => <CustomerContextDetail context={context} />}
+    />
   )
 }
 
@@ -116,7 +110,7 @@ interface CustomerContextDetailProps {
 
 function CustomerContextDetail({ context }: CustomerContextDetailProps) {
   return (
-    <div className="rounded border border-gray-300 p-3">
+    <div>
       <h4 className="text-sm font-semibold text-gray-900">{context.name}</h4>
       <p className="text-xs text-gray-500">
         Health: <span className={`rounded px-2 py-0.5 ${healthBadgeClass(context.health_status)}`}>{context.health_status}</span>
