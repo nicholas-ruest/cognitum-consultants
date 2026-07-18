@@ -1,0 +1,180 @@
+# Deployment (PROMPT-28, ADR-014)
+
+This document covers the container image, how `bff-api` serves the SPA + API from that one image, the
+liveness/readiness health-check design, graceful shutdown, and the CI pipeline step that builds, migrates,
+and smoke-tests the image as a stand-in for a real deploy. See
+[ADR-014: Deployment and Runtime Topology](../.plans/adr/ADR-014-deployment-runtime-topology.md) for the
+governing decision this implements.
+
+**No real deployment target (cloud provider, Kubernetes, Nomad, etc.) is chosen yet** — ADR-014 leaves that
+deliberately open (risk #8 in `.plans/implementation-plan.md` §6). What exists today is the deployable
+*artifact* (the container image) and a CI job (`deploy` in `.github/workflows/ci.yml`) that proves the image
+is correct — builds it, migrates a throwaway Postgres, runs the image against it, and smoke-tests
+`/healthz`, `/readyz`, the SPA, and `/api/*` — as the CI-verifiable proxy for an actual rollout. Once a target
+is chosen, that job's final "run the built image" step is where an orchestrator-specific deploy step slots
+in; everything before it (build, migrate, smoke-test the image) stays the same.
+
+## The image: `Dockerfile` (repo root)
+
+Multi-stage build, five stages:
+
+1. **`chef`** — `lukemathwalker/cargo-chef:latest-rust-1-bookworm` (the official cargo-chef image, which
+   ships `cargo-chef` preinstalled — simpler than installing it via `cargo install` on a plain `rust:*` base).
+2. **`planner`** — `cargo chef prepare --recipe-path recipe.json`: computes a dependency-only "recipe" from
+   the full workspace source tree.
+3. **`builder`** — `cargo chef cook --release --recipe-path recipe.json` builds *only* the dependency graph
+   (cached across builds whenever `Cargo.toml`/`Cargo.lock` haven't changed, even if application source has —
+   this is cargo-chef's whole point), then `COPY . .` and `cargo build --release -p bff-api`.
+   `SQLX_OFFLINE=true` is set for this stage: there's no live Postgres reachable from inside a Docker build,
+   so `sqlx`'s `query!`/`query_as!` macros type-check against the committed `.sqlx/` offline metadata instead
+   (see `crates/persistence/README.md`, "Offline compile-time query checking" — verified working as of
+   PROMPT-20).
+4. **`frontend-builder`** — separate `node:24-slim` stage: `npm ci && npm run build` in `frontend/`,
+   producing `frontend/dist/`.
+5. **`runtime`** — the final image: the compiled `bff-api` binary + `frontend/dist/`'s contents, on a minimal
+   base, running as a non-root user.
+
+### Runtime base image choice: `debian:bookworm-slim`, not distroless
+
+ADR-014 leaves this open ("a `distroless` or `slim` image"). This Dockerfile uses `debian:bookworm-slim`.
+Trade-off, documented per the ADR's own ask:
+
+- **Why not distroless** (`gcr.io/distroless/cc` or similar): distroless images have no shell and no package
+  manager, which means no `useradd` to create the non-root user this stage runs as, and no `apt` to install
+  `ca-certificates` (needed for rustls-based outbound TLS — Nexus calls, ADR-007; Postgres, ADR-010 — to
+  verify certificates against the system trust store). Both are doable with distroless, but need a more
+  involved multi-stage dance (e.g. building `/etc/passwd`/`ca-certificates.crt` in an earlier stage and
+  copying them in) for a marginal size/CVE-surface win.
+- **Why `slim`**: `apt-get install ca-certificates` + `useradd` are one-liners; the result is still small
+  (~150MB total, see below) and — usefully for local debugging — still has a real shell (`docker exec -it
+  <container> sh`) if something needs inspecting live, which distroless doesn't allow.
+- **Revisit if**: image size or the base OS package CVE surface becomes a real constraint (e.g. a security
+  policy that mandates distroless/scratch images). The application layers (binary + SPA assets) are a small
+  fraction of the image; swapping the base would mostly need re-adding the non-root-user/CA-cert provisioning
+  described above.
+
+Measured image size (`docker images`): **~150MB** total, of which the Debian base is ~85MB, the `apt-get`
+layer (ca-certificates + user creation) is ~10MB, and the application layers (binary + SPA) are ~15MB.
+
+### `.dockerignore`
+
+Excludes `target/`, `frontend/node_modules/`, `frontend/dist/` (host builds of these would otherwise bloat
+the build context and — worse — could get copied into a stage instead of being rebuilt there), VCS metadata,
+and unrelated tooling directories (`.claude/`, `.agents/`, etc.).
+
+## Serving the SPA from `bff-api`
+
+`crates/config`'s `Config` gained a `static_dir: Option<PathBuf>` field, sourced from the `STATIC_DIR`
+environment variable — **unset by default**, not defaulted to a fixed path. `crates/bff-api/src/main.rs`
+checks `cfg.static_dir` at startup: if it's set *and* the directory actually exists on disk, it mounts
+`tower_http::services::ServeDir` (falling back to `<static_dir>/index.html` via `.not_found_service(...)`,
+so client-side routes get `index.html` rather than a `404` — ADR-006, even though there's no real
+client-side router yet per PROMPT-18's decision) as the router's `fallback_service`. Otherwise it logs a note
+and skips static-file serving entirely.
+
+This is why the existing Rust test suite (which never sets `STATIC_DIR` and has no built frontend on disk)
+is unaffected — `cargo test --workspace` stays green with the static-file layer simply never mounted in any
+test process.
+
+The container image sets `STATIC_DIR=/app/frontend-dist` (see the `Dockerfile`'s `runtime` stage), where
+`frontend/dist/`'s contents are copied.
+
+**Route precedence**: the fallback service is added to the router *before* `.layer(...)` (metrics/correlation
+middleware) is applied, and Axum's routing always tries every explicit `.route(...)`/`.nest(...)` match
+before falling back — so `/healthz`, `/readyz`, `/api/*`, and `/metrics` can never be shadowed by the SPA
+fallback; the static-file service only ever answers a request nothing else matched.
+
+## Health checks: liveness (`/healthz`) vs. readiness (`/readyz`)
+
+Split into two endpoints (`crates/bff-api/src/health.rs`), matching the two different questions an
+orchestrator's probes ask:
+
+- **`GET /healthz`** (liveness — "is the process up at all?"): always `200 {"status":"ok"}` once the listener
+  is bound. Deliberately does **not** touch Postgres or any other dependency — a liveness probe failing
+  typically causes an orchestrator to *restart* the container, which is the wrong response to "a downstream
+  dependency is temporarily degraded."
+- **`GET /readyz`** (readiness — "should traffic be routed to this instance right now?"): runs
+  `persistence::check_connectivity` (a cheap `SELECT 1`) against the shared pool, bounded by a 2-second
+  timeout so a hung database can't hang the probe itself. Returns `200
+  {"status":"ok","checks":{"database":"ok"}}` when reachable, or `503
+  {"status":"error","checks":{"database":"..."}}` (with `"error: <detail>"` or `"timeout"`) otherwise — the
+  shape a readiness probe (which typically just stops routing traffic, not restarts) expects to poll on a
+  short interval.
+
+Both are unit-tested against a real (testcontainers) Postgres pool and against a deliberately-unreachable one
+— see `crates/bff-api/src/health.rs`'s `tests` module and `crates/persistence/src/lib.rs`'s
+`check_connectivity_*` tests.
+
+## Graceful shutdown
+
+`main.rs` wires `axum::serve(listener, app).with_graceful_shutdown(shutdown_signal())`, where
+`shutdown_signal()` races `tokio::signal::unix::signal(SignalKind::terminate())` (SIGTERM — what `docker
+stop`/an orchestrator sends) against `tokio::signal::ctrl_c()` (SIGINT, for local-dev `Ctrl+C` parity),
+resolving on whichever comes first. Once triggered, Axum stops accepting new connections and waits for
+in-flight requests (and, per ADR-011, would wait for open SSE connections once those exist) to finish before
+`axum::serve(...).await` returns; `main` then logs `"bff-api shut down"` and exits with code `0`.
+
+**Verified against a real running container** (not just code review): starting the built image, sending
+`docker stop` (which sends `SIGTERM`), and observing the logs shows `"received SIGTERM, starting graceful
+shutdown"` followed immediately by `"bff-api shut down"`, with `docker stop` completing in well under 200ms —
+nowhere near Docker's 10-second default grace period before it would escalate to `SIGKILL`. See the
+Verification section of the PROMPT-28 work log / this repo's CI `deploy` job for the reproducible version.
+
+## Migrations: an explicit pipeline step, not implicit at startup
+
+Per ADR-014 ("migrations run... via an explicit CI/CD deploy step in production... not as an implicit
+side-effect of application startup"), `bff-api` does **not** run migrations on boot. The CI `deploy` job (see
+below) applies every `crates/persistence/migrations/*.up.sql` file directly via `psql` against the
+provisioned Postgres *before* starting the built image — the same "explicit step ahead of the app starting"
+shape a real deploy pipeline would use ahead of an orchestrator rollout.
+
+## CI: the `deploy` job
+
+`.github/workflows/ci.yml`'s `deploy` job (`needs: [rust, frontend]`, same "start after the fast gates pass"
+rationale as the `e2e` job):
+
+1. `docker build -t cognitum-consultants:ci .` — the multi-stage image above.
+2. Starts a throwaway `postgres:17-alpine` container (`docker run`, published to the runner's `5432`) — the
+   same pattern `frontend/e2e/support/test-stack.ts` already uses for the `e2e` job, reused here rather than
+   introducing a second way to stand up Postgres in CI.
+3. Applies every migration via `docker exec -i <postgres container> psql ... < migration.sql` — the explicit
+   pre-rollout step described above.
+4. Runs the built image (`docker run --network host ...`, `DATABASE_URL` pointed at the migrated Postgres) —
+   this is the "deploy to a local Docker environment for validation" the PROMPT-28 acceptance criteria call
+   for, standing in for a real target that doesn't exist yet.
+5. Smoke-tests the running container: `/healthz` and `/readyz` both `200`, `/` returns the SPA's
+   `index.html` (proving ADR-006's "one image serves both" model actually works, not just compiles), and
+   `/api/session` with no session cookie still correctly returns `401` (proving the static-file fallback
+   never shadows a real `/api/*` route).
+6. `docker stop`s the container (graceful-shutdown validation — a hung shutdown would show up as this step
+   running unusually long, since Docker only escalates to `SIGKILL` after its default grace period) and tears
+   everything down.
+
+See [`docs/ci.md`](ci.md) for the full pipeline (the `rust`, `frontend`, and `e2e` jobs this one runs after).
+
+## Running it locally
+
+```bash
+docker build -t cognitum-consultants:local .
+
+docker network create cognitum-local-net
+docker run -d --name cognitum-local-db --network cognitum-local-net \
+  -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=cognitum_consultants \
+  -p 55432:5432 postgres:17-alpine
+
+DATABASE_URL=postgres://postgres:postgres@localhost:55432/cognitum_consultants \
+  sqlx migrate run --source crates/persistence/migrations
+
+docker run -d --name cognitum-local-app --network cognitum-local-net -p 3000:3000 \
+  -e DATABASE_URL=postgres://postgres:postgres@cognitum-local-db:5432/cognitum_consultants \
+  -e APP_ENV=dev \
+  cognitum-consultants:local
+
+curl http://localhost:3000/healthz
+curl http://localhost:3000/readyz
+curl http://localhost:3000/          # SPA index.html
+
+docker stop cognitum-local-app       # graceful shutdown
+docker rm -f cognitum-local-app cognitum-local-db
+docker network rm cognitum-local-net
+```

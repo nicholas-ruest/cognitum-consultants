@@ -22,9 +22,17 @@ persistence = { path = "../persistence" }
 config = { path = "../config" }
 axum.workspace = true
 # `permissions::PermissionCache` (PROMPT-15) needs `tokio::sync::RwLock`
-# for concurrent per-consultant cache access across request handlers.
-tokio = { workspace = true, features = ["sync"] }
+# for concurrent per-consultant cache access across request handlers; `time`
+# bounds the `GET /readyz` database check with a timeout (`health` module,
+# ADR-014); `signal` lets `main` wait on `SIGTERM`/`SIGINT` for graceful
+# shutdown (ADR-014, ADR-011's "drain in-flight requests/SSE connections").
+tokio = { workspace = true, features = ["sync", "time", "signal"] }
 serde_json = "1.0.150"
+# Serves the built frontend SPA (`frontend/dist`) as static files at `/`,
+# with an `index.html` fallback for client-side routing (ADR-014's
+# single-image API+SPA topology; ADR-006). Only mounted when `Config::static_dir`
+# is set and exists on disk — see `main.rs`.
+tower-http = { version = "0.6", features = ["fs"] }
 tracing.workspace = true
 uuid.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }

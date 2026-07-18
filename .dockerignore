@@ -1,0 +1,41 @@
+# Keep the Docker build context small and avoid copying host build
+# artifacts into the image (ADR-014 multi-stage Dockerfile) — everything
+# excluded here is either regenerated inside the build (target/, dist/,
+# node_modules/) or irrelevant to it (tooling/docs/VCS metadata).
+
+# Rust
+/target/
+crates/*/target/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/.vite/
+
+# VCS / editor
+.git/
+.gitignore
+
+# Claude Code / Ruflo / claude-flow tooling — not needed inside the image
+.claude/
+.claude-flow/
+.agents/
+.swarm/
+.mcp.json
+CLAUDE.md
+CLAUDE.local.md
+ruvector.db
+agentdb.rvf
+agentdb.rvf.lock
+skills-lock.json
+
+# Docs / planning (not part of the deployable artifact)
+.plans/
+docs/
+
+# Env
+.env
+.env.*
+!.env.example

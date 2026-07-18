@@ -138,3 +138,100 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           retention-days: 7
+
+  # PROMPT-28 / ADR-014: builds the multi-stage `Dockerfile` image, runs
+  # database migrations against a provisioned Postgres as an explicit
+  # pre-rollout step (ADR-014, ADR-010 — not an implicit side effect of
+  # application startup), then "deploys" the built image to a local Docker
+  # environment and smoke-tests it as the CI-verifiable proxy for a real
+  # deploy — no real target (cloud/orchestrator) is chosen yet, see
+  # `docs/deployment.md`. `needs: [rust, frontend]` mirrors the `e2e` job:
+  # this is the heaviest job in the pipeline, so it only starts once the
+  # fast unit-level gates have already passed.
+  deploy:
+    name: Deploy (build image, migrate, run, smoke-test)
+    runs-on: ubuntu-latest
+    needs: [rust, frontend]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Task 1: multi-stage build (cargo-chef Rust layer + Vite frontend
+      # layer + minimal runtime layer) — see Dockerfile / docs/deployment.md.
+      - name: docker build
+        run: docker build -t cognitum-consultants:ci .
+
+      # Same "throwaway `docker run postgres:17-alpine`, migrate via `psql`
+      # inside the container" pattern the `e2e` job's
+      # `frontend/e2e/support/test-stack.ts` already uses, so this doesn't
+      # introduce a second, divergent way of standing up a migrated
+      # Postgres in CI.
+      - name: Start Postgres
+        run: |
+          docker run -d --name deploy-postgres -p 5432:5432 \
+            -e POSTGRES_PASSWORD=postgres postgres:17-alpine
+          for _ in $(seq 1 60); do
+            docker exec deploy-postgres pg_isready -U postgres && break
+            sleep 1
+          done
+
+      # Explicit pre-rollout migration step (ADR-014), independent of
+      # whether the image being deployed happens to run them itself.
+      - name: Run database migrations
+        run: |
+          for f in crates/persistence/migrations/*.up.sql; do
+            echo "Applying $f"
+            docker exec -i deploy-postgres psql -v ON_ERROR_STOP=1 -U postgres -d postgres < "$f"
+          done
+
+      # "Deploy" to a local Docker environment (Task 5's CI-verifiable proxy
+      # for a real target, see docs/deployment.md). `--network host` lets
+      # the app container reach the Postgres container's host-published
+      # port directly — both containers, and this smoke-test step, all run
+      # against `127.0.0.1` as a result.
+      - name: Run the built image
+        run: |
+          docker run -d --name deploy-app --network host \
+            -e DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \
+            -e APP_ENV=dev \
+            cognitum-consultants:ci
+
+      # Task 3/1 validation: readiness (DB-backed), the SPA served at `/`,
+      # and `/api/*` still answering correctly (401 with no session cookie)
+      # from the *same* image that serves the SPA — this is ADR-006's
+      # "single image serves both" claim, verified for real rather than by
+      # code review.
+      - name: Smoke-test the running container
+        run: |
+          for _ in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3000/readyz >/dev/null && break
+            sleep 1
+          done
+
+          echo "-- GET /healthz --"
+          curl -sf http://127.0.0.1:3000/healthz
+
+          echo "-- GET /readyz --"
+          curl -sf http://127.0.0.1:3000/readyz
+
+          echo "-- GET / (SPA index.html) --"
+          curl -sf http://127.0.0.1:3000/ | grep -q '<div id="root">'
+
+          echo "-- GET /api/session with no cookie (expect 401) --"
+          status=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/session)
+          test "$status" = "401"
+
+      # Task 4 validation: `docker stop` sends SIGTERM; a hung/forcibly
+      # killed shutdown would make this step itself run long (Docker falls
+      # back to SIGKILL after its default 10s grace period) rather than
+      # just fail outright, so this also catches a regression there.
+      - name: Stop the container (graceful shutdown)
+        run: docker stop deploy-app
+
+      - name: Show app logs
+        if: always()
+        run: docker logs deploy-app
+
+      - name: Tear down
+        if: always()
+        run: docker rm -f deploy-app deploy-postgres

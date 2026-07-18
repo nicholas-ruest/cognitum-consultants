@@ -1,5 +1,6 @@
 mod correlation;
 mod dashboard;
+mod health;
 mod metrics;
 mod permissions;
 mod sales;
@@ -9,13 +10,9 @@ mod telemetry;
 use std::sync::Arc;
 
 use axum::routing::{get, post};
-use axum::{middleware, Json, Router};
-use serde_json::{json, Value};
+use axum::{middleware, Router};
 use session::AppState;
-
-async fn healthz() -> Json<Value> {
-    Json(json!({ "status": "ok" }))
-}
+use tower_http::services::{ServeDir, ServeFile};
 
 #[tokio::main]
 async fn main() {
@@ -136,20 +133,86 @@ async fn main() {
         .merge(dashboard::dashboard_router(state.clone()))
         .merge(sales::sales_router(state.clone()));
 
-    let app = Router::new()
-        .route("/healthz", get(healthz))
+    let mut app = Router::new()
+        .route("/healthz", get(health::healthz))
+        .route("/readyz", get(health::readyz))
         .nest("/api", api_router)
-        .route("/metrics", get(metrics::handler))
+        .route("/metrics", get(metrics::handler));
+
+    // ADR-014: single image serves both `/api/*` and the SPA. Mounted as a
+    // `fallback_service` — added *before* the `.layer(...)` calls below so
+    // metrics/correlation middleware wrap it the same as every other
+    // route — so explicit routes above (`/healthz`, `/readyz`, `/api/*`,
+    // `/metrics`) always win; the static-file service only ever answers a
+    // request nothing else matched. Only mounted when `STATIC_DIR` is set
+    // *and* exists on disk: the existing test suite (and any environment
+    // with no built frontend) never sets it, so this is skipped rather than
+    // required, per this unit's acceptance criteria.
+    match cfg.static_dir.as_deref().filter(|dir| dir.is_dir()) {
+        Some(static_dir) => {
+            tracing::info!(dir = %static_dir.display(), "serving SPA static assets");
+            let index_html = static_dir.join("index.html");
+            let serve_dir = ServeDir::new(static_dir).not_found_service(ServeFile::new(index_html));
+            app = app.fallback_service(serve_dir);
+        }
+        None => {
+            tracing::info!(
+                static_dir = ?cfg.static_dir,
+                "STATIC_DIR not configured or missing; skipping static file serving"
+            );
+        }
+    }
+
+    let app = app
         .layer(middleware::from_fn(metrics::track))
         .layer(middleware::from_fn(correlation::middleware))
         .with_state(state);
 
-    let addr = format!("127.0.0.1:{}", cfg.port);
+    // Bind on all interfaces, not just loopback: a containerized deployment
+    // (ADR-014) needs this process reachable from outside its own network
+    // namespace (`docker run -p`, an orchestrator's Service, etc.), and
+    // `127.0.0.1` would silently make the container unreachable despite the
+    // process itself running fine.
+    let addr = format!("0.0.0.0:{}", cfg.port);
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .unwrap_or_else(|err| panic!("failed to bind to {addr}: {err}"));
 
     tracing::info!("bff-api listening on {}", listener.local_addr().unwrap());
 
-    axum::serve(listener, app).await.expect("server error");
+    // ADR-014 graceful shutdown: stop accepting new connections and let
+    // in-flight requests (including open SSE connections, per ADR-011) drain
+    // on `SIGTERM`/`SIGINT` instead of the process being killed mid-request.
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("server error");
+
+    tracing::info!("bff-api shut down");
+}
+
+/// Resolves once `SIGTERM` or `SIGINT` (Ctrl+C, for local-dev parity) is
+/// received, whichever comes first — passed to
+/// `axum::serve(...).with_graceful_shutdown` so the server drains in-flight
+/// requests instead of being killed mid-request (ADR-014).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => tracing::info!("received Ctrl+C, starting graceful shutdown"),
+        _ = terminate => tracing::info!("received SIGTERM, starting graceful shutdown"),
+    }
 }

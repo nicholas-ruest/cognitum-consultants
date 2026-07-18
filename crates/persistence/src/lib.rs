@@ -59,6 +59,18 @@ pub async fn create_pool(database_url: &str) -> Result<PgPool, sqlx::Error> {
         .await
 }
 
+/// Cheap connectivity probe for readiness checks (ADR-014): runs a trivial
+/// `SELECT 1` against `pool`, acquiring a connection from the existing pool
+/// rather than opening a new one. Returns `Err` if Postgres is unreachable
+/// or the query otherwise fails. Callers that need a bounded worst-case
+/// latency (e.g. `bff-api`'s `GET /readyz`) should wrap this in their own
+/// `tokio::time::timeout` — this function does not impose one itself, so it
+/// stays usable from contexts that already have their own timeout policy.
+pub async fn check_connectivity(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT 1").fetch_one(pool).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use sqlx::Row;
@@ -91,5 +103,42 @@ mod tests {
         let value: i32 = row.get("one");
 
         assert_eq!(value, 1);
+    }
+
+    /// `check_connectivity` (ADR-014 readiness probe) succeeds against a
+    /// live pool, mirroring `create_pool_connects_and_runs_a_query` above.
+    #[tokio::test]
+    async fn check_connectivity_succeeds_against_a_live_pool() {
+        let container =
+            Postgres::default().start().await.expect("failed to start postgres container");
+        let host = container.get_host().await.expect("failed to resolve container host");
+        let port = container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("failed to resolve container port");
+        let database_url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+
+        let pool = create_pool(&database_url).await.expect("create_pool failed to connect");
+
+        check_connectivity(&pool).await.expect("check_connectivity failed against a live pool");
+    }
+
+    /// `check_connectivity` reports `Err` (not a panic, not a silent `Ok`)
+    /// when Postgres is unreachable — the failure mode `GET /readyz` needs
+    /// to be able to detect and turn into a `503`. Uses `connect_lazy`
+    /// against a loopback port nothing listens on (immediate
+    /// `ECONNREFUSED`, no container teardown timing to race) so this stays
+    /// fast and deterministic rather than depending on how quickly a
+    /// stopped testcontainer actually stops accepting connections.
+    #[tokio::test]
+    async fn check_connectivity_fails_when_postgres_is_unreachable() {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://postgres:postgres@127.0.0.1:1/postgres")
+            .expect("connect_lazy should not eagerly connect");
+
+        let result = check_connectivity(&pool).await;
+
+        assert!(result.is_err(), "expected check_connectivity to fail against an unreachable pool");
     }
 }

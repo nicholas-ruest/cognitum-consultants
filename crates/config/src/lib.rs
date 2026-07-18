@@ -13,12 +13,14 @@
 //! env-var parsing and dev-default fallback, no domain logic.
 
 use std::env;
+use std::path::PathBuf;
 
 const DATABASE_URL_ENV: &str = "DATABASE_URL";
 const PORT_ENV: &str = "PORT";
 const LOG_LEVEL_ENV: &str = "RUST_LOG";
 const NEXUS_ENDPOINT_URL_ENV: &str = "NEXUS_ENDPOINT_URL";
 const APP_ENV_ENV: &str = "APP_ENV";
+const STATIC_DIR_ENV: &str = "STATIC_DIR";
 
 const DEFAULT_DATABASE_URL: &str = "postgres://localhost:5432/cognitum_consultants";
 const DEFAULT_PORT: u16 = 3000;
@@ -73,6 +75,15 @@ pub struct Config {
     /// ADR-008) has a single source of truth to check against rather than
     /// each crate re-implementing its own env-detection logic.
     pub environment: String,
+    /// Directory containing the built frontend SPA (`frontend/dist`'s
+    /// contents) to serve as static files at `/` (ADR-014's single-image
+    /// API+SPA topology; ADR-006). Sourced from `STATIC_DIR`, unset by
+    /// default — **not** defaulted to a fixed path, deliberately, so the
+    /// existing test suite (which never sets `STATIC_DIR` and has no built
+    /// frontend on disk) continues to run with static-file serving simply
+    /// skipped rather than needing to fake one out. The container image
+    /// (repo-root `Dockerfile`) sets `STATIC_DIR=/app/frontend-dist`.
+    pub static_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -108,7 +119,9 @@ impl Config {
 
         let environment = get(APP_ENV_ENV).unwrap_or_else(|| DEFAULT_APP_ENV.to_owned());
 
-        Config { database_url, port, log_level, nexus_endpoint_url, environment }
+        let static_dir = get(STATIC_DIR_ENV).map(PathBuf::from);
+
+        Config { database_url, port, log_level, nexus_endpoint_url, environment, static_dir }
     }
 
     /// True when this config's [`environment`](Config::environment) is
@@ -155,6 +168,7 @@ mod tests {
         assert_eq!(config.nexus_endpoint_url, DEFAULT_NEXUS_ENDPOINT_URL);
         assert_eq!(config.environment, DEFAULT_APP_ENV);
         assert!(config.is_dev());
+        assert_eq!(config.static_dir, None);
     }
 
     #[test]
@@ -165,6 +179,7 @@ mod tests {
             (LOG_LEVEL_ENV, "debug"),
             (NEXUS_ENDPOINT_URL_ENV, "https://nexus.example.com"),
             (APP_ENV_ENV, "prod"),
+            (STATIC_DIR_ENV, "/app/frontend-dist"),
         ]);
 
         let config = Config::from_env(lookup(vars));
@@ -175,6 +190,7 @@ mod tests {
         assert_eq!(config.nexus_endpoint_url, "https://nexus.example.com");
         assert_eq!(config.environment, "prod");
         assert!(!config.is_dev());
+        assert_eq!(config.static_dir, Some(PathBuf::from("/app/frontend-dist")));
     }
 
     #[test]
@@ -192,6 +208,7 @@ mod tests {
             log_level: DEFAULT_LOG_LEVEL.to_owned(),
             nexus_endpoint_url: DEFAULT_NEXUS_ENDPOINT_URL.to_owned(),
             environment: DEFAULT_APP_ENV.to_owned(),
+            static_dir: None,
         };
 
         assert_eq!(config.redacted_database_url(), "postgres://***@db.internal:5432/prod");
@@ -205,6 +222,7 @@ mod tests {
             log_level: DEFAULT_LOG_LEVEL.to_owned(),
             nexus_endpoint_url: DEFAULT_NEXUS_ENDPOINT_URL.to_owned(),
             environment: DEFAULT_APP_ENV.to_owned(),
+            static_dir: None,
         };
 
         assert_eq!(config.redacted_database_url(), DEFAULT_DATABASE_URL);

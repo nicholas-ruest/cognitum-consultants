@@ -1,10 +1,10 @@
 # CI
 
 CI is defined at [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) and runs on every push and pull
-request targeting `main`. Three jobs run: `rust` and `frontend` run in parallel; `e2e` (PROMPT-27) declares
-`needs: [rust, frontend]` and only starts once both finish, giving it the "slower cadence" ADR-013 §6 calls
-for. A PR cannot merge unless all three jobs, and every step within them, succeed. Each step is a separate,
-named CI step, so a failure is directly attributable to the command that failed.
+request targeting `main`. Four jobs run: `rust` and `frontend` run in parallel; `e2e` (PROMPT-27) and `deploy`
+(PROMPT-28) both declare `needs: [rust, frontend]` and only start once both finish, giving them the "slower
+cadence" ADR-013 §6 calls for. A PR cannot merge unless all four jobs, and every step within them, succeed.
+Each step is a separate, named CI step, so a failure is directly attributable to the command that failed.
 
 ## `rust` job
 
@@ -73,6 +73,14 @@ See [`docs/SALES_FLOW_PATTERN.md`](SALES_FLOW_PATTERN.md) §5 for how this fits 
 and for the reference this job's orchestration modules (`e2e/support/*`) are meant to be reused by Phase 4's
 own e2e specs (PROMPT-34+) with no changes beyond a new spec file.
 
+## `deploy` job (PROMPT-28)
+
+`needs: [rust, frontend]`, same slower-cadence rationale as `e2e`. Builds the repo-root `Dockerfile` image,
+migrates a throwaway Postgres, runs the built image against it, and smoke-tests `/healthz`, `/readyz`, the
+SPA at `/`, and `/api/session`'s `401` before tearing everything down — see
+[`docs/deployment.md`](deployment.md) for the full walkthrough, the runtime base image trade-off, and why
+this is presently the CI-verifiable proxy for a real deploy (no target environment is chosen yet, ADR-014).
+
 ## Governing ADRs
 
 - [ADR-013: Testing Strategy](../.plans/adr/ADR-013-testing-strategy.md) — §6 defines this CI gating layer;
@@ -80,6 +88,9 @@ own e2e specs (PROMPT-34+) with no changes beyond a new spec file.
 - [ADR-002: Primary Language Rust, Secondary TypeScript](../.plans/adr/ADR-002-primary-language-rust-secondary-typescript.md)
   — explains why CI has exactly two toolchain surfaces (Rust + Node/TS) rather than more; `e2e` uses both in
   one job because the flow it drives spans both.
+- [ADR-014: Deployment and Runtime Topology](../.plans/adr/ADR-014-deployment-runtime-topology.md) — governs
+  the `deploy` job: the multi-stage `Dockerfile` it builds, migrations as an explicit pre-rollout step, and
+  the health-check/graceful-shutdown contract it smoke-tests. See [`docs/deployment.md`](deployment.md).
 
 ## Running the gates locally
 

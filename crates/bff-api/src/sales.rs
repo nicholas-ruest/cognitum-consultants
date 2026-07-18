@@ -369,6 +369,7 @@ mod tests {
             log_level: "info".to_owned(),
             nexus_endpoint_url: "http://localhost:8080".to_owned(),
             environment: config::DEV_ENVIRONMENT.to_owned(),
+            static_dir: None,
         }
     }
 
