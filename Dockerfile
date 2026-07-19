@@ -57,14 +57,34 @@ RUN cargo build --release -p bff-api
 # 4. frontend-builder
 ########################################
 FROM node:24-slim AS frontend-builder
-WORKDIR /app/frontend
-# Copy lockfile-defining files first so `npm ci` is cached separately from
-# the rest of the frontend source, same layer-caching intent as the Rust
-# `cargo chef cook` step above.
-COPY frontend/package.json frontend/package-lock.json ./
+WORKDIR /app
+# Real login (Google Sign-In via Firebase): Vite bakes `VITE_*` env vars
+# into the built JS bundle at build time -- Cloud Run's runtime env vars
+# never reach already-built static assets, so these must be build args
+# instead. Values are the standard public Firebase *web* config (safe to
+# embed client-side, not secrets in the security sense).
+ARG VITE_FIREBASE_API_KEY
+ARG VITE_FIREBASE_AUTH_DOMAIN
+ARG VITE_FIREBASE_PROJECT_ID
+ARG VITE_FIREBASE_APP_ID
+ENV VITE_FIREBASE_API_KEY=$VITE_FIREBASE_API_KEY
+ENV VITE_FIREBASE_AUTH_DOMAIN=$VITE_FIREBASE_AUTH_DOMAIN
+ENV VITE_FIREBASE_PROJECT_ID=$VITE_FIREBASE_PROJECT_ID
+ENV VITE_FIREBASE_APP_ID=$VITE_FIREBASE_APP_ID
+# Copy every workspace member's manifest first so `npm ci` is cached
+# separately from application source, same layer-caching intent as the Rust
+# `cargo chef cook` step above. npm workspaces resolve from one root
+# lockfile (PROMPT-42/ADR-017 moved this off a lone frontend/package-lock.json),
+# so every member's package.json must be present for `npm ci` to succeed,
+# not just frontend/'s.
+COPY package.json package-lock.json ./
+COPY frontend/package.json frontend/package.json
+COPY packages/design-system/package.json packages/design-system/package.json
+COPY packages/dashboard-components/package.json packages/dashboard-components/package.json
 RUN npm ci
-COPY frontend/ .
-RUN npm run build
+COPY frontend/ frontend/
+COPY packages/ packages/
+RUN npm run build --workspace=frontend
 
 ########################################
 # 5. runtime
