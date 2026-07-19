@@ -92,11 +92,13 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * configurable fixture rather than adding more hardcoded exceptions.
  *
  * # Events-poll: not part of the ADR-029 capability envelope
- * `bff-api::event_ingestion`'s polling loop calls `events/v1/poll` directly
- * over a raw `NexusTransport` (`crates/bff-api/src/event_ingestion.rs`),
+ * `bff-api::event_ingestion`'s polling loop calls
+ * `api/v1/events/poll?consumer=cognitum-consultants[&since=...]` (ADR-030 §3)
+ * directly over a raw `NexusTransport` (`crates/bff-api/src/event_ingestion.rs`),
  * not through `CapabilityCaller` — ADR-029's migration only touched the ten
- * `nexus-client` gateways, not this separate polling mechanism. That route
- * (and the `/_test/...` inspection namespace) is untouched by the ADR-029
+ * `nexus-client` gateways, not this separate polling mechanism; ADR-030 gave
+ * it a real path + `EventEnvelope` response shape. That route (and the
+ * `/_test/...` inspection namespace) is otherwise untouched by the ADR-029
  * rewrite below.
  *
  * # Inspection, not shared JS state
@@ -205,9 +207,10 @@ const LEARNING_CATALOG_FIXTURE: LearningSnapshot[] = [
 
 /**
  * `CapabilityEventReceived` shape, mirrored from
- * `crates/bff-core/src/event_ingestion.rs` — the provisional
- * `GET events/v1/poll` contract `bff-api`'s ingestion polling loop
- * (PROMPT-30) expects a bare JSON array of.
+ * `crates/bff-core/src/event_ingestion.rs`. This is the *ingested* shape a
+ * spec enqueues via `/_test/enqueue-event`; the poll wire shape is now
+ * nexus's `EventEnvelope` (ADR-030), which the mock produces from these via
+ * `toEventEnvelope` and `bff-api` maps back with `envelope_into_received`.
  */
 /** `ConsultantProfileIntake` shape, mirrored from `crates/nexus-client/src/capacity.rs`. */
 export interface ConsultantProfileIntake {
@@ -409,6 +412,75 @@ export interface CapabilityEventReceived {
 }
 
 /**
+ * Nexus's real `EventEnvelope` wire shape (ADR-030 §3), mirrored from
+ * `crates/nexus-contracts/src/lib.rs`. This is what the real
+ * `GET /api/v1/events/poll` returns a bare JSON array of — NOT
+ * `CapabilityEventReceived`. `bff-api`'s `event_ingestion::fetch_events`
+ * deserializes this and maps it into `CapabilityEventReceived` via
+ * `envelope_into_received`, reading the BFF-domain projection fields
+ * (`summary`, `deep_link`, `consultant_id`, `related_origin_event_id`) out of
+ * the event-type-specific `payload`.
+ */
+export interface EventEnvelope {
+  event_id: string
+  event_type: string
+  event_version: string
+  occurred_at: string
+  producer_repo: string
+  aggregate_id: string
+  aggregate_type: string
+  organization_id: string
+  actor: { user_id: string | null; service_account: string | null; role: string }
+  correlation_id: string
+  payload: Record<string, unknown>
+  metadata: Record<string, unknown>
+}
+
+/**
+ * Wraps a test-enqueued `CapabilityEventReceived` in nexus's real
+ * `EventEnvelope` shape — the exact inverse of `bff-api`'s
+ * `envelope_into_received`, so the round-trip
+ * (spec enqueues `CapabilityEventReceived` → this envelope → bff-api maps it
+ * back) reproduces the identical `CapabilityEventReceived` the ingestion
+ * pipeline classifies. The envelope-level fields carry the mapped-1:1 values
+ * (`producer_repo`←`origin_capability`, `event_id`←`origin_event_id`,
+ * `event_type`, `occurred_at`←`received_at`); the BFF-domain projection
+ * fields go into `payload` under the keys `envelope_into_received` reads.
+ * `consultant_id` is put in the payload verbatim — it must match the
+ * logged-in consultant, or the mapped event won't route to them.
+ */
+function toEventEnvelope(event: CapabilityEventReceived): EventEnvelope {
+  const payload: Record<string, unknown> = {
+    summary: event.summary,
+    consultant_id: event.consultant_id,
+  }
+  if (event.deep_link !== null && event.deep_link !== undefined) {
+    payload.deep_link = event.deep_link
+  }
+  if (event.related_origin_event_id !== undefined) {
+    payload.related_origin_event_id = event.related_origin_event_id
+  }
+  return {
+    event_id: event.origin_event_id,
+    event_type: event.event_type,
+    event_version: '1.0.0',
+    occurred_at: event.received_at,
+    producer_repo: event.origin_capability,
+    aggregate_id: `${event.origin_capability}-${event.origin_event_id}`,
+    aggregate_type: event.origin_capability,
+    organization_id: 'org-e2e',
+    actor: {
+      user_id: null,
+      service_account: 'consultants@cognitum-prod.iam.gserviceaccount.com',
+      role: 'service',
+    },
+    correlation_id: event.origin_event_id,
+    payload,
+    metadata: {},
+  }
+}
+
+/**
  * Inbound `nexus_contracts::CapabilityRequest` envelope, mirrored from
  * `crates/nexus-client/src/transport.rs`'s `CapabilityRequest`. This mock
  * only ever reads `request_id`/`payload` — the identity/bookkeeping fields
@@ -490,7 +562,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
   const legalClauseRequests: RecordedCommand[] = []
   // PROMPT-33 e2e: events queued via `POST /_test/enqueue-event` and
   // drained (returned once, then cleared) on the next `GET
-  // events/v1/poll` — see `notifications-sse.spec.ts`. Draining, not
+  // api/v1/events/poll` — see `notifications-sse.spec.ts`. Draining, not
   // repeat-serving, mirrors a well-behaved real Nexus honoring the
   // poller's cursor: once delivered, an event isn't handed out again.
   let queuedEvents: CapabilityEventReceived[] = []
@@ -720,14 +792,24 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
-    // Events poll (PROMPT-30/PROMPT-33): not part of the ADR-029 capability
-    // envelope — see the module docs. `bff-api`'s ingestion polling loop
-    // (`crates/bff-api/src/event_ingestion.rs`) expects a bare JSON array
-    // of `CapabilityEventReceived`. Drains whatever `_test/enqueue-event`
-    // has queued so far, then clears it — see the `queuedEvents` doc
-    // comment above.
-    if (method === 'GET' && url.pathname === '/events/v1/poll') {
-      const events = queuedEvents
+    // Events poll (ADR-030 §3): nexus's real consumer feed at
+    // `GET /api/v1/events/poll?consumer=<repo_id>[&since=<cursor>]`, returning
+    // a bare JSON array of `EventEnvelope`. `bff-api`'s ingestion polling loop
+    // (`crates/bff-api/src/event_ingestion.rs`) always sends
+    // `consumer=cognitum-consultants` (and, once its cursor advances, a
+    // `since=`); nexus 400s a request with no `consumer`, so this mock does
+    // too. Drains whatever `_test/enqueue-event` has queued so far (as
+    // `CapabilityEventReceived`), wraps each in the real `EventEnvelope` shape
+    // via `toEventEnvelope`, then clears the queue — see the `queuedEvents`
+    // doc comment above. The `since` param is accepted but ignored (the drain
+    // already models a cursor-honoring feed: once delivered, an event isn't
+    // handed out again).
+    if (method === 'GET' && url.pathname === '/api/v1/events/poll') {
+      if (url.searchParams.get('consumer') !== 'cognitum-consultants') {
+        sendJson(response, 400, { error: 'events poll requires consumer=cognitum-consultants' })
+        return
+      }
+      const events = queuedEvents.map(toEventEnvelope)
       queuedEvents = []
       sendJson(response, 200, events)
       return
@@ -791,7 +873,8 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
     }
 
     // Test-injection route (PROMPT-33): queues one `CapabilityEventReceived`
-    // for the *next* `GET events/v1/poll` to pick up — how
+    // for the *next* `GET api/v1/events/poll` to pick up (wrapped in an
+    // `EventEnvelope` by `toEventEnvelope`) — how
     // `notifications-sse.spec.ts` drives a real Nexus->ingestion->NOTIFY/
     // LISTEN->SSE->browser push without needing a real Nexus.
     if (method === 'POST' && url.pathname === '/_test/enqueue-event') {

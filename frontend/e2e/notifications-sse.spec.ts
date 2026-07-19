@@ -43,7 +43,8 @@ test('an event ingested via Nexus polling is pushed over SSE and appears in the 
   await expect(page.getByText('No notifications.')).toBeVisible()
 
   // 3. Queue a fresh CapabilityEventReceived for the mock Nexus server's
-  // *next* `events/v1/poll` response — `bff-api`'s background polling loop
+  // *next* `api/v1/events/poll` response (the mock wraps it in nexus's
+  // `EventEnvelope` shape) — `bff-api`'s background polling loop
   // (PROMPT-30) will pick this up on its own schedule (no manual trigger
   // from this test beyond queuing it).
   const originEventId = `e2e-sse-${Date.now()}`
