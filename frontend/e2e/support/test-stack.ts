@@ -80,15 +80,31 @@ async function startPostgresContainer(): Promise<void> {
     POSTGRES_IMAGE,
   ])
 
-  // `pg_isready` alone is not a sufficient readiness signal here: the
-  // official postgres image runs a transient bootstrap instance for
-  // `initdb`, which `pg_isready` can report as "ready" for, then shuts
-  // down and restarts the real server -- a caller that proceeds straight
-  // to `psql` after `pg_isready` succeeds can race that restart and find
-  // no socket at all (observed in CI as "connection to server on socket
-  // ... failed: No such file or directory" on the very first migration).
-  // Requiring an actual query to succeed only passes once the real,
-  // final server instance is genuinely accepting connections.
+  // Neither `pg_isready` nor a real `psql` query is a sufficient readiness
+  // signal here: the official postgres image's entrypoint starts a fully
+  // functional *transient* server to run `initdb`/init scripts against
+  // (over the same Unix socket this container exposes), which answers
+  // `pg_isready` AND genuine SQL queries successfully, then shuts that
+  // instance down and starts the real, final server. A caller that
+  // proceeds right after either check passes can race that shutdown and
+  // find no socket at all for a brief window (observed in CI as
+  // "connection to server on socket ... failed: No such file or
+  // directory", on both the readiness check itself and, once, on the very
+  // first migration after a readiness check had already reported success).
+  //
+  // The one unambiguous signal this entrypoint gives for "the real server
+  // is up" is its own log line: "database system is ready to accept
+  // connections" is printed once for the transient instance and a second
+  // time for the final one (see the postgres image's docker-entrypoint.sh).
+  // Waiting for that line to appear twice in `docker logs`, THEN
+  // confirming with a real query, closes the race the two previous
+  // (insufficient) attempts at this fix did not.
+  await waitFor('Postgres init to reach the final server instance', 60_000, async () => {
+    const { stdout, stderr } = await execFileAsync('docker', ['logs', POSTGRES_CONTAINER_NAME])
+    const occurrences = ((stdout + stderr).match(/database system is ready to accept connections/g) ?? []).length
+    return occurrences >= 2
+  })
+
   await waitFor('Postgres to accept connections', 60_000, async () => {
     await execFileAsync('docker', [
       'exec',
