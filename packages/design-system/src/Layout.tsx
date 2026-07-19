@@ -28,9 +28,9 @@ export interface LayoutProps {
 
 export function Layout({ sidebar, children }: LayoutProps) {
   return (
-    <div className="flex min-h-screen flex-col md:flex-row">
+    <div className="flex min-h-screen flex-col bg-background md:flex-row">
       {sidebar ? (
-        <aside className="hidden w-64 shrink-0 border-r border-gray-200 md:block">
+        <aside className="hidden w-64 shrink-0 border-r border-border/50 bg-card/40 md:block">
           {sidebar}
         </aside>
       ) : null}

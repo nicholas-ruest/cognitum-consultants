@@ -48,11 +48,11 @@ export function NotificationCentre() {
     },
   })
 
-  if (isPending) return <p className="text-sm text-gray-500">Loading notifications…</p>
+  if (isPending) return <p className="text-sm text-muted-foreground">Loading notifications…</p>
   if (isError) return <Alert variant="error">Failed to load notifications.</Alert>
 
   if (notifications.length === 0) {
-    return <p className="text-xs text-gray-500">No notifications.</p>
+    return <p className="text-xs text-muted-foreground">No notifications.</p>
   }
 
   return (
@@ -81,14 +81,14 @@ function NotificationRow({ notification, onMarkRead, isMarkingRead }: Notificati
   const isRead = notification.read_state === 'read'
 
   return (
-    <div className="rounded border border-gray-200 p-3">
-      <p className="text-sm font-semibold text-gray-900">{notification.title}</p>
-      <p className="text-sm text-gray-700">{notification.body}</p>
+    <div className="rounded border border-border p-3">
+      <p className="text-sm font-semibold text-foreground">{notification.title}</p>
+      <p className="text-sm text-card-foreground">{notification.body}</p>
 
       {notification.deep_link !== null ? (
         <a
           href={notification.deep_link}
-          className="text-xs text-blue-600 hover:underline"
+          className="text-xs text-primary hover:underline"
           target="_blank"
           rel="noreferrer"
         >
@@ -98,7 +98,7 @@ function NotificationRow({ notification, onMarkRead, isMarkingRead }: Notificati
 
       <div className="mt-2">
         {isRead ? (
-          <span className="text-xs text-gray-500">Read</span>
+          <span className="text-xs text-muted-foreground">Read</span>
         ) : (
           <Button variant="secondary" disabled={isMarkingRead} onClick={onMarkRead}>
             {isMarkingRead ? 'Marking…' : 'Dismiss'}

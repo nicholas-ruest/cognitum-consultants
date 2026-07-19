@@ -68,7 +68,7 @@ export function ProductCatalog() {
   })
 
   if (catalogQuery.isPending) {
-    return <p className="text-sm text-gray-500">Loading the product catalog…</p>
+    return <p className="text-sm text-muted-foreground">Loading the product catalog…</p>
   }
 
   if (catalogQuery.isError) {
@@ -78,7 +78,7 @@ export function ProductCatalog() {
   const cards = catalogQuery.data ?? []
 
   if (cards.length === 0) {
-    return <p className="text-xs text-gray-500">No approved products yet.</p>
+    return <p className="text-xs text-muted-foreground">No approved products yet.</p>
   }
 
   return (
@@ -89,11 +89,11 @@ export function ProductCatalog() {
         <button
           type="button"
           onClick={select}
-          className="w-full rounded border border-gray-200 p-3 text-left hover:bg-gray-50"
+          className="w-full rounded border border-border p-3 text-left hover:bg-secondary/60"
         >
           <div className="flex items-center justify-between gap-2">
-            <p className="text-sm font-semibold text-gray-900">{card.name}</p>
-            <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{card.pricing_guidance}</span>
+            <p className="text-sm font-semibold text-foreground">{card.name}</p>
+            <span className="rounded bg-secondary px-2 py-0.5 text-xs text-card-foreground">{card.pricing_guidance}</span>
           </div>
         </button>
       )}
@@ -109,15 +109,15 @@ interface ProductReferenceDetailProps {
 function ProductReferenceDetail({ card }: ProductReferenceDetailProps) {
   return (
     <div>
-      <h4 className="text-sm font-semibold text-gray-900">{card.name}</h4>
-      <p className="text-xs text-gray-500">Pricing: {card.pricing_guidance}</p>
-      <p className="mt-1 text-xs text-gray-700">{card.packaging_summary}</p>
+      <h4 className="text-sm font-semibold text-foreground">{card.name}</h4>
+      <p className="text-xs text-muted-foreground">Pricing: {card.pricing_guidance}</p>
+      <p className="mt-1 text-xs text-card-foreground">{card.packaging_summary}</p>
 
       {card.demo_assets.length > 0 ? (
         <ul className="mt-2 flex flex-col gap-1">
           {card.demo_assets.map((assetUrl) => (
             <li key={assetUrl}>
-              <a href={assetUrl} className="text-xs text-blue-600 hover:underline" target="_blank" rel="noreferrer">
+              <a href={assetUrl} className="text-xs text-primary hover:underline" target="_blank" rel="noreferrer">
                 View demo asset
               </a>
             </li>

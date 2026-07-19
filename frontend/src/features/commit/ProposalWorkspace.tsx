@@ -179,7 +179,7 @@ export function ProposalWorkspace() {
   const proposals = proposalsQuery.data ?? []
 
   if (proposalsQuery.isPending) {
-    return <p className="text-sm text-gray-500">Loading proposals…</p>
+    return <p className="text-sm text-muted-foreground">Loading proposals…</p>
   }
 
   if (proposalsQuery.isError) {
@@ -205,7 +205,7 @@ export function ProposalWorkspace() {
       </CapabilityForm>
 
       {proposals.length === 0 ? (
-        <p className="text-xs text-gray-500">No proposals yet.</p>
+        <p className="text-xs text-muted-foreground">No proposals yet.</p>
       ) : (
         <ListDetailPanel
           items={proposals}
@@ -216,13 +216,13 @@ export function ProposalWorkspace() {
             <button
               type="button"
               onClick={select}
-              className="w-full rounded border border-gray-200 p-3 text-left hover:bg-gray-50"
+              className="w-full rounded border border-border p-3 text-left hover:bg-secondary/60"
             >
               <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-gray-900">{proposal.title}</p>
-                <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{proposal.status}</span>
+                <p className="text-sm font-semibold text-foreground">{proposal.title}</p>
+                <span className="rounded bg-secondary px-2 py-0.5 text-xs text-card-foreground">{proposal.status}</span>
               </div>
-              <p className="text-xs text-gray-500">Stage: {proposal.stage}</p>
+              <p className="text-xs text-muted-foreground">Stage: {proposal.stage}</p>
             </button>
           )}
           renderDetail={(proposal) => (
@@ -247,14 +247,14 @@ interface ProposalDetailProps {
 function ProposalDetail({ proposal, onAction, isActionPending }: ProposalDetailProps) {
   return (
     <div>
-      <h4 className="text-sm font-semibold text-gray-900">{proposal.title}</h4>
-      <p className="text-xs text-gray-500">
+      <h4 className="text-sm font-semibold text-foreground">{proposal.title}</h4>
+      <p className="text-xs text-muted-foreground">
         Status: {proposal.status} · Stage: {proposal.stage}
       </p>
-      <p className="text-xs text-gray-500">Last updated: {new Date(proposal.last_updated_at).toLocaleString()}</p>
+      <p className="text-xs text-muted-foreground">Last updated: {new Date(proposal.last_updated_at).toLocaleString()}</p>
 
       {proposal.deep_link !== null ? (
-        <a href={proposal.deep_link} className="text-xs text-blue-600 hover:underline" target="_blank" rel="noreferrer">
+        <a href={proposal.deep_link} className="text-xs text-primary hover:underline" target="_blank" rel="noreferrer">
           Open in Commit
         </a>
       ) : null}
@@ -270,7 +270,7 @@ function ProposalDetail({ proposal, onAction, isActionPending }: ProposalDetailP
       {/* PROMPT-41: approved legal clauses for this proposal, read-only —
           see `ApprovedClauses.tsx`'s module docs for why this is Legal's
           primary integration point in this repo. */}
-      <div className="mt-3 border-t border-gray-200 pt-3">
+      <div className="mt-3 border-t border-border pt-3">
         <ApprovedClauses context={{ proposalId: proposal.proposal_id }} />
       </div>
     </div>

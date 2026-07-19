@@ -55,11 +55,11 @@ export function ActionQueue() {
     },
   })
 
-  if (isPending) return <p className="text-sm text-gray-500">Loading action queue…</p>
+  if (isPending) return <p className="text-sm text-muted-foreground">Loading action queue…</p>
   if (isError) return <Alert variant="error">Failed to load your action queue.</Alert>
 
   if (entries.length === 0) {
-    return <p className="text-xs text-gray-500">Nothing needs your attention right now.</p>
+    return <p className="text-xs text-muted-foreground">Nothing needs your attention right now.</p>
   }
 
   return (
@@ -86,18 +86,18 @@ interface ActionQueueRowProps {
 
 function ActionQueueRow({ entry, onStart, isStarting }: ActionQueueRowProps) {
   return (
-    <div className="rounded border border-gray-200 p-3">
+    <div className="rounded border border-border p-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-semibold text-gray-900">{entry.title}</p>
+        <p className="text-sm font-semibold text-foreground">{entry.title}</p>
         <StateBadge state={entry.action_state} />
       </div>
-      <p className="text-sm text-gray-700">{entry.body}</p>
+      <p className="text-sm text-card-foreground">{entry.body}</p>
       <ExpiryIndicator expiresAt={entry.expires_at} />
 
       {entry.deep_link !== null ? (
         <a
           href={entry.deep_link}
-          className="text-xs text-blue-600 hover:underline"
+          className="text-xs text-primary hover:underline"
           target="_blank"
           rel="noreferrer"
         >
@@ -128,10 +128,10 @@ const STATE_LABELS: Record<ActionQueueEntryData['action_state'], string> = {
 }
 
 const STATE_CLASSES: Record<ActionQueueEntryData['action_state'], string> = {
-  pending: 'bg-yellow-50 text-yellow-800',
-  in_progress: 'bg-blue-50 text-blue-800',
-  completed: 'bg-green-50 text-green-800',
-  expired: 'bg-gray-100 text-gray-600',
+  pending: 'bg-warning/10 text-[hsl(35_85%_70%)]',
+  in_progress: 'bg-primary/10 text-primary',
+  completed: 'bg-accent/10 text-[hsl(142_70%_65%)]',
+  expired: 'bg-secondary text-muted-foreground',
 }
 
 function StateBadge({ state }: { state: ActionQueueEntryData['action_state'] }) {
@@ -148,7 +148,7 @@ function ExpiryIndicator({ expiresAt }: { expiresAt: string }) {
   const isSoon = remainingMs <= EXPIRY_WARNING_THRESHOLD_MS
 
   return (
-    <p className={`text-xs ${isSoon ? 'font-semibold text-red-600' : 'text-gray-500'}`}>
+    <p className={`text-xs ${isSoon ? 'font-semibold text-[hsl(0_70%_70%)]' : 'text-muted-foreground'}`}>
       {remainingMs <= 0 ? 'Expired' : `Expires ${formatRelative(remainingMs)}`}
     </p>
   )

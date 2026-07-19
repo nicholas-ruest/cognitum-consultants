@@ -24,12 +24,13 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
-  primary: 'bg-blue-600 text-white hover:bg-blue-700',
-  secondary: 'bg-gray-100 text-gray-900 hover:bg-gray-200',
+  primary: 'bg-primary text-primary-foreground shadow-[0_4px_8px_-2px_hsl(185_80%_50%/0.3)] hover:bg-primary/90',
+  secondary: 'bg-secondary text-foreground border border-border hover:bg-secondary/70 hover:border-primary/50',
 }
 
 export function Button({ variant = 'primary', className, ...buttonProps }: ButtonProps) {
-  const classes = `rounded px-4 py-2 text-sm font-medium ${VARIANT_CLASSES[variant]} ${className ?? ''}`.trim()
+  const classes =
+    `rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${VARIANT_CLASSES[variant]} ${className ?? ''}`.trim()
 
   return <button type="button" className={classes} {...buttonProps} />
 }

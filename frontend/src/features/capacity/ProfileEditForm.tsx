@@ -164,7 +164,7 @@ export function ProfileEditForm() {
   }
 
   if (profileQuery.isPending) {
-    return <p className="text-sm text-gray-500">Loading your profile…</p>
+    return <p className="text-sm text-muted-foreground">Loading your profile…</p>
   }
 
   if (profileQuery.isError) {

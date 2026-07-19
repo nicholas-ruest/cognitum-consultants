@@ -90,19 +90,28 @@ export interface SidebarProps {
 export function Sidebar({ items }: SidebarProps) {
   return (
     <nav aria-label="Primary" className="flex flex-col gap-1 p-4">
-      <ul className="flex flex-col gap-1">
-        {items.map((item) => (
-          <li key={item.href}>
-            <a
-              href={item.href}
-              className="flex items-center gap-2 rounded px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
-            >
-              {item.icon}
-              <span>{item.label}</span>
-            </a>
-          </li>
-        ))}
-      </ul>
+      <h2 className="mb-1 px-3 text-[0.6875rem] font-semibold uppercase tracking-widest text-muted-foreground/70">
+        Modules
+      </h2>
+      {items.length === 0 ? (
+        <p className="rounded-md border border-dashed border-border/60 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
+          No capability modules assigned yet.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {items.map((item) => (
+            <li key={item.href}>
+              <a
+                href={item.href}
+                className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
     </nav>
   )
 }

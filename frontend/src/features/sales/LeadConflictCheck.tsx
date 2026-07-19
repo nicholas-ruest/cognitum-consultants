@@ -222,7 +222,7 @@ export function LeadConflictCheck() {
                 {startProposalMutation.isPending ? 'Starting…' : 'Start Proposal in Commit'}
               </Button>
               {startProposalMutation.isError ? (
-                <p className="mt-1 text-sm text-red-600">Failed to start a proposal. Please try again.</p>
+                <p className="mt-1 text-sm text-[hsl(0_70%_70%)]">Failed to start a proposal. Please try again.</p>
               ) : null}
             </div>
           ) : null}

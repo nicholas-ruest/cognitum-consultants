@@ -29,18 +29,18 @@ export function TextInput({ label, errorMessage, ...inputProps }: TextInputProps
 
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={id} className="text-sm font-medium text-gray-700">
+      <label htmlFor={id} className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
         {label}
       </label>
       <input
         id={id}
         aria-invalid={errorMessage ? true : undefined}
         aria-describedby={errorId}
-        className="rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+        className="rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50"
         {...inputProps}
       />
       {errorMessage ? (
-        <p id={errorId} className="text-sm text-red-600">
+        <p id={errorId} className="text-sm text-[hsl(0_70%_70%)]">
           {errorMessage}
         </p>
       ) : null}

@@ -77,13 +77,13 @@ async function requestTaskCompletion(taskId: string): Promise<void> {
  * provisional vocabulary.
  */
 const DELIVERY_STATUS_BADGE_CLASSES: Record<string, string> = {
-  on_track: 'bg-green-100 text-green-800',
-  at_risk: 'bg-yellow-100 text-yellow-800',
-  delayed: 'bg-red-100 text-red-800',
+  on_track: 'bg-accent/10 text-[hsl(142_70%_65%)]',
+  at_risk: 'bg-warning/10 text-[hsl(35_85%_70%)]',
+  delayed: 'bg-destructive/10 text-[hsl(0_70%_70%)]',
 }
 
 function deliveryStatusBadgeClass(deliveryStatus: string): string {
-  return DELIVERY_STATUS_BADGE_CLASSES[deliveryStatus.toLowerCase()] ?? 'bg-gray-100 text-gray-700'
+  return DELIVERY_STATUS_BADGE_CLASSES[deliveryStatus.toLowerCase()] ?? 'bg-secondary text-card-foreground'
 }
 
 export function ExecutionWorkspace() {
@@ -113,7 +113,7 @@ export function ExecutionWorkspace() {
   })
 
   if (engagementsQuery.isPending) {
-    return <p className="text-sm text-gray-500">Loading your delivery workspace…</p>
+    return <p className="text-sm text-muted-foreground">Loading your delivery workspace…</p>
   }
 
   if (engagementsQuery.isError) {
@@ -123,7 +123,7 @@ export function ExecutionWorkspace() {
   const engagements = engagementsQuery.data ?? []
 
   if (engagements.length === 0) {
-    return <p className="text-xs text-gray-500">No assigned engagements yet.</p>
+    return <p className="text-xs text-muted-foreground">No assigned engagements yet.</p>
   }
 
   return (
@@ -139,10 +139,10 @@ export function ExecutionWorkspace() {
           <button
             type="button"
             onClick={select}
-            className="w-full rounded border border-gray-200 p-3 text-left hover:bg-gray-50"
+            className="w-full rounded border border-border p-3 text-left hover:bg-secondary/60"
           >
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-semibold text-gray-900">{engagement.engagement_id}</p>
+              <p className="text-sm font-semibold text-foreground">{engagement.engagement_id}</p>
               <span className={`rounded px-2 py-0.5 text-xs ${deliveryStatusBadgeClass(engagement.delivery_status)}`}>
                 {engagement.delivery_status}
               </span>
@@ -172,8 +172,8 @@ interface EngagementDetailProps {
 function EngagementDetail({ engagement, onRequestCompletion, isRequestingCompletion, requestingTaskId }: EngagementDetailProps) {
   return (
     <div>
-      <h4 className="text-sm font-semibold text-gray-900">{engagement.engagement_id}</h4>
-      <p className="text-xs text-gray-500">
+      <h4 className="text-sm font-semibold text-foreground">{engagement.engagement_id}</h4>
+      <p className="text-xs text-muted-foreground">
         Delivery status:{' '}
         <span className={`rounded px-2 py-0.5 ${deliveryStatusBadgeClass(engagement.delivery_status)}`}>
           {engagement.delivery_status}
@@ -181,7 +181,7 @@ function EngagementDetail({ engagement, onRequestCompletion, isRequestingComplet
       </p>
 
       {engagement.deep_link !== null ? (
-        <a href={engagement.deep_link} className="text-xs text-blue-600 hover:underline" target="_blank" rel="noreferrer">
+        <a href={engagement.deep_link} className="text-xs text-primary hover:underline" target="_blank" rel="noreferrer">
           Open in Execution
         </a>
       ) : null}
@@ -189,16 +189,16 @@ function EngagementDetail({ engagement, onRequestCompletion, isRequestingComplet
       <WorkstreamsAndMilestones engagement={engagement} />
 
       <div className="mt-2">
-        <h5 className="text-xs font-semibold text-gray-700">Tasks</h5>
+        <h5 className="text-xs font-semibold text-card-foreground">Tasks</h5>
         {engagement.tasks.length === 0 ? (
-          <p className="text-xs text-gray-500">No tasks assigned.</p>
+          <p className="text-xs text-muted-foreground">No tasks assigned.</p>
         ) : (
           <ul className="mt-1 flex flex-col gap-2">
             {engagement.tasks.map((task) => (
-              <li key={task.task_id} className="flex items-center justify-between gap-2 rounded border border-gray-100 p-2">
+              <li key={task.task_id} className="flex items-center justify-between gap-2 rounded border border-border/50 p-2">
                 <div>
-                  <p className="text-xs font-medium text-gray-900">{task.title}</p>
-                  <p className="text-xs text-gray-500">Status: {task.status}</p>
+                  <p className="text-xs font-medium text-foreground">{task.title}</p>
+                  <p className="text-xs text-muted-foreground">Status: {task.status}</p>
                 </div>
                 {/* Requests completion through the BFF back to Execution — see
                     `requestTaskCompletion`'s doc comment: this never marks
@@ -225,11 +225,11 @@ function WorkstreamsAndMilestones({ engagement }: { engagement: EngagementSnapsh
   return (
     <div className="mt-2 flex flex-col gap-2">
       <div>
-        <h5 className="text-xs font-semibold text-gray-700">Workstreams</h5>
+        <h5 className="text-xs font-semibold text-card-foreground">Workstreams</h5>
         {engagement.workstreams.length === 0 ? (
-          <p className="text-xs text-gray-500">None.</p>
+          <p className="text-xs text-muted-foreground">None.</p>
         ) : (
-          <ul className="list-inside list-disc text-xs text-gray-700">
+          <ul className="list-inside list-disc text-xs text-card-foreground">
             {engagement.workstreams.map((workstream) => (
               <li key={workstream}>{workstream}</li>
             ))}
@@ -238,11 +238,11 @@ function WorkstreamsAndMilestones({ engagement }: { engagement: EngagementSnapsh
       </div>
 
       <div>
-        <h5 className="text-xs font-semibold text-gray-700">Milestones</h5>
+        <h5 className="text-xs font-semibold text-card-foreground">Milestones</h5>
         {engagement.milestones.length === 0 ? (
-          <p className="text-xs text-gray-500">None.</p>
+          <p className="text-xs text-muted-foreground">None.</p>
         ) : (
-          <ul className="list-inside list-disc text-xs text-gray-700">
+          <ul className="list-inside list-disc text-xs text-card-foreground">
             {engagement.milestones.map((milestone) => (
               <li key={milestone}>{milestone}</li>
             ))}

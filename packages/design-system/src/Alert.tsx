@@ -26,9 +26,9 @@ export interface AlertProps {
 }
 
 const VARIANT_CLASSES: Record<AlertVariant, string> = {
-  info: 'bg-blue-50 text-blue-800 border-blue-200',
-  warning: 'bg-yellow-50 text-yellow-800 border-yellow-200',
-  error: 'bg-red-50 text-red-800 border-red-200',
+  info: 'bg-primary/10 text-primary border-primary/25',
+  warning: 'bg-warning/10 text-[hsl(35_85%_70%)] border-warning/25',
+  error: 'bg-destructive/10 text-[hsl(0_70%_70%)] border-destructive/25',
 }
 
 const VARIANT_ROLES: Record<AlertVariant, 'status' | 'alert'> = {
@@ -41,7 +41,7 @@ export function Alert({ variant = 'info', children }: AlertProps) {
   return (
     <div
       role={VARIANT_ROLES[variant]}
-      className={`rounded border px-4 py-3 text-sm ${VARIANT_CLASSES[variant]}`}
+      className={`rounded-lg border px-4 py-3 text-sm ${VARIANT_CLASSES[variant]}`}
     >
       {children}
     </div>

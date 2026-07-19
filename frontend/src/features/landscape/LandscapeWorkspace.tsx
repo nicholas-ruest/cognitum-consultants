@@ -94,7 +94,7 @@ function IntelligenceDigestCard() {
   })
 
   if (digestQuery.isPending) {
-    return <p className="text-sm text-gray-500">Loading the intelligence digest…</p>
+    return <p className="text-sm text-muted-foreground">Loading the intelligence digest…</p>
   }
 
   if (digestQuery.isError) {
@@ -105,25 +105,25 @@ function IntelligenceDigestCard() {
 
   return (
     <section>
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Intelligence Digest</h4>
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Intelligence Digest</h4>
       {items.length === 0 ? (
-        <p className="text-xs text-gray-500">No approved intelligence items yet.</p>
+        <p className="text-xs text-muted-foreground">No approved intelligence items yet.</p>
       ) : (
         <ListDetailPanel
           items={items}
           getKey={(item) => item.intel_id}
           listClassName="mt-1 flex flex-col gap-2"
           renderRow={(item) => (
-            <div className="rounded border border-gray-200 p-3">
+            <div className="rounded border border-border p-3">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-gray-900">{item.topic}</p>
-                <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
+                <p className="text-sm font-semibold text-foreground">{item.topic}</p>
+                <span className="rounded bg-secondary px-2 py-0.5 text-xs text-card-foreground">
                   {new Date(item.published_at).toLocaleDateString()}
                 </span>
               </div>
-              <p className="mt-1 text-xs text-gray-700">{item.summary}</p>
+              <p className="mt-1 text-xs text-card-foreground">{item.summary}</p>
               {item.deep_link !== null ? (
-                <a href={item.deep_link} className="text-xs text-blue-600 hover:underline" target="_blank" rel="noreferrer">
+                <a href={item.deep_link} className="text-xs text-primary hover:underline" target="_blank" rel="noreferrer">
                   Open in Landscape
                 </a>
               ) : null}
@@ -172,7 +172,7 @@ function ObservationSubmissionForm() {
 
   return (
     <section>
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Submit a Field Observation</h4>
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Submit a Field Observation</h4>
 
       <CapabilityForm
         alerts={alerts}
