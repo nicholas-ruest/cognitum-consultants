@@ -6,17 +6,22 @@
 //! [`ConsultantPreferencesRepository`]) against the ADR-010 datastore.
 
 mod action_queue_entry;
+mod consultant_action_item;
 mod consultant_preferences;
 mod dashboard_configuration;
 mod event_ingestion;
 mod notification_item;
 mod preference_key;
+mod prospect;
 mod save_outcome;
 mod workflow_session;
 
 pub use action_queue_entry::{
     ActionQueueEntry, ActionQueueEntryError, ActionQueueRepository, ActionState,
     ParseActionStateError,
+};
+pub use consultant_action_item::{
+    ConsultantActionItem, ConsultantActionItemError, ConsultantActionItemRepository,
 };
 pub use consultant_preferences::{
     ConsultantPreferences, ConsultantPreferencesError, ConsultantPreferencesRepository, RepoError,
@@ -36,6 +41,7 @@ pub use notification_item::{
     ReadState,
 };
 pub use preference_key::{ParsePreferenceKeyError, PreferenceKey};
+pub use prospect::{ParseProspectStageError, Prospect, ProspectError, ProspectNote, ProspectRepository, ProspectStage};
 pub use save_outcome::SaveOutcome;
 pub use workflow_session::{
     CrossCapabilityWorkflowSession, ParseWorkflowSessionStatusError, WorkflowSessionError,

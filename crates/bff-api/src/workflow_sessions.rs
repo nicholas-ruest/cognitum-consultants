@@ -400,6 +400,8 @@ mod tests {
                 "test-audience".to_owned(),
                 None,
             )),
+            prospect_repository: Arc::new(persistence::PgProspectRepository::new(pool.clone())),
+            action_item_repository: Arc::new(persistence::PgConsultantActionItemRepository::new(pool.clone())),
         };
 
         let router = Router::new().nest("/api", workflow_sessions_router(state.clone())).with_state(state.clone());

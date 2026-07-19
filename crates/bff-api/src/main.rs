@@ -1,3 +1,4 @@
+mod action_items;
 mod capacity;
 mod commit;
 mod correlation;
@@ -332,6 +333,12 @@ async fn main() {
         Arc::new(persistence::PgNotificationRepository::new(db_pool.clone()));
     let action_queue_repository: Arc<dyn bff_core::ActionQueueRepository> =
         Arc::new(persistence::PgActionQueueRepository::new(db_pool.clone()));
+    // ADR-020: entirely consultant-authored, never Nexus-sourced -- see
+    // `sales`/`action_items` module docs.
+    let prospect_repository: Arc<dyn bff_core::ProspectRepository> =
+        Arc::new(persistence::PgProspectRepository::new(db_pool.clone()));
+    let action_item_repository: Arc<dyn bff_core::ConsultantActionItemRepository> =
+        Arc::new(persistence::PgConsultantActionItemRepository::new(db_pool.clone()));
     let event_bus = Arc::new(bff_core::EventBus::default());
 
     // PROMPT-32, ADR-014's recommended cross-instance SSE fan-out: the
@@ -401,6 +408,8 @@ async fn main() {
         event_bus,
         event_notify_publisher,
         google_identity_verifier,
+        prospect_repository,
+        action_item_repository,
     };
 
     // `/api/login/dev` is dev-only in practice (see `session` module docs)
@@ -465,7 +474,8 @@ async fn main() {
         .merge(workflow_sessions::workflow_sessions_router(state.clone()))
         .merge(notifications_sse::notifications_router(state.clone()))
         .merge(notifications::notifications_write_router(state.clone()))
-        .merge(reactions::reactions_router(state.clone()));
+        .merge(reactions::reactions_router(state.clone()))
+        .merge(action_items::action_items_router(state.clone()));
 
     let mut app = Router::new()
         .route("/healthz", get(health::healthz))

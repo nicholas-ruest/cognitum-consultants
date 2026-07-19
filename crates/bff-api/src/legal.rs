@@ -440,7 +440,7 @@ mod tests {
             Arc::new(persistence::PgWorkflowSessionRepository::new(pool.clone()));
 
         let state = AppState {
-            db_pool: pool,
+            db_pool: pool.clone(),
             session_provider,
             dev_session_provider: Some(dev_session_provider),
             firebase_session_provider: None,
@@ -471,6 +471,8 @@ mod tests {
                 "test-audience".to_owned(),
                 None,
             )),
+            prospect_repository: Arc::new(persistence::PgProspectRepository::new(pool.clone())),
+            action_item_repository: Arc::new(persistence::PgConsultantActionItemRepository::new(pool.clone())),
         };
 
         let router = Router::new().nest("/api", legal_router(state.clone())).with_state(state);

@@ -445,6 +445,8 @@ mod tests {
                 "test-audience".to_owned(),
                 None,
             )),
+            prospect_repository: Arc::new(persistence::PgProspectRepository::new(pool.clone())),
+            action_item_repository: Arc::new(persistence::PgConsultantActionItemRepository::new(pool.clone())),
         }
     }
 

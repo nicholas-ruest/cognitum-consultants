@@ -8,17 +8,21 @@
 //! for the local-dev / CI migration and offline-query-check workflow.
 
 mod action_queue_entry_repository;
+mod consultant_action_item_repository;
 mod consultant_preferences_repository;
 mod dashboard_configuration_repository;
 mod event_notify;
 mod notification_repository;
+mod prospect_repository;
 mod workflow_session_repository;
 
 pub use action_queue_entry_repository::PgActionQueueRepository;
+pub use consultant_action_item_repository::PgConsultantActionItemRepository;
 pub use consultant_preferences_repository::PgConsultantPreferencesRepository;
 pub use dashboard_configuration_repository::PgDashboardConfigurationRepository;
 pub use event_notify::{listen, PgListener, PgNotifyPublisher};
 pub use notification_repository::PgNotificationRepository;
+pub use prospect_repository::PgProspectRepository;
 pub use workflow_session_repository::PgWorkflowSessionRepository;
 
 use std::time::Duration;

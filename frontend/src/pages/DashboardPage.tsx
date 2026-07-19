@@ -1,15 +1,18 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button, Card, CardGrid, Header, Layout, navItemsFromAssertions, Sidebar } from '@cognitum/design-system'
+import { ActionList } from '../features/action-items/ActionList'
 import { ProfileEditForm } from '../features/capacity/ProfileEditForm'
 import { ProposalWorkspace } from '../features/commit/ProposalWorkspace'
 import { CustomerContextList } from '../features/customer/CustomerContextList'
 import { LearningDashboard } from '../features/edu/LearningDashboard'
 import { ExecutionWorkspace } from '../features/execution/ExecutionWorkspace'
 import { LandscapeWorkspace } from '../features/landscape/LandscapeWorkspace'
+import { ApprovedClauses } from '../features/legal/ApprovedClauses'
 import { ActionQueue } from '../features/notifications/ActionQueue'
 import { NotificationCentre } from '../features/notifications/NotificationCentre'
 import { ProductCatalog } from '../features/products/ProductCatalog'
 import { LeadConflictCheck } from '../features/sales/LeadConflictCheck'
+import { ProspectPipeline } from '../features/sales/ProspectPipeline'
 import type { SessionState } from '../lib/SessionContext'
 import { useDashboardQuery } from '../lib/useDashboardQuery'
 import { useNotificationStream } from '../lib/useNotificationStream'
@@ -123,6 +126,13 @@ export function DashboardPage({ session }: DashboardPageProps) {
             <Card title="Action Queue">
               <ActionQueue />
             </Card>
+            {/* ADR-020 part B: a consultant-authored checklist, not
+                capability-gated (same as the two cards above) -- see
+                `ActionList.tsx`'s module docs for why it's kept separate
+                from `ActionQueue`. */}
+            <Card title="My Action List">
+              <ActionList />
+            </Card>
           </CardGrid>
         </div>
 
@@ -140,7 +150,15 @@ export function DashboardPage({ session }: DashboardPageProps) {
                 {cards.map((card) => (
                   <Card key={card.module_id} title={capitalize(card.module_id)}>
                     {card.module_id === 'sales' ? (
-                      <LeadConflictCheck />
+                      // ADR-020 part A: the prospect pipeline joins the
+                      // existing conflict-check tool inside the same Sales
+                      // card, rather than replacing it.
+                      <div className="flex flex-col gap-4">
+                        <LeadConflictCheck />
+                        <div className="border-t border-border pt-4">
+                          <ProspectPipeline />
+                        </div>
+                      </div>
                     ) : card.module_id === 'commit' ? (
                       <ProposalWorkspace />
                     ) : card.module_id === 'edu' ? (
@@ -155,6 +173,13 @@ export function DashboardPage({ session }: DashboardPageProps) {
                       <ProductCatalog />
                     ) : card.module_id === 'landscape' ? (
                       <LandscapeWorkspace />
+                    ) : card.module_id === 'legal' ? (
+                      // `ClauseContext` requires either a `proposalId` (see
+                      // `ProposalWorkspace.tsx`'s in-context usage) or a
+                      // `topic` -- there's no specific proposal on this
+                      // general dashboard card, so `"general"` is a
+                      // placeholder default pending a real topic-picker.
+                      <ApprovedClauses context={{ topic: 'general' }} />
                     ) : (
                       <p className="text-xs text-muted-foreground">no live data yet</p>
                     )}

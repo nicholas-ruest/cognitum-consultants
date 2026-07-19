@@ -255,6 +255,16 @@ pub struct AppState {
     /// and "configured but this caller doesn't match", instead of an extra
     /// `Option` layer on top.
     pub google_identity_verifier: Arc<auth::google_identity_token::GoogleIdentityTokenVerifier>,
+    /// Repository for [`bff_core::Prospect`] (ADR-020 part A) — backs
+    /// `crate::sales`'s `/sales/prospects*` routes. Entirely
+    /// consultant-authored data; unlike every gateway field above, nothing
+    /// here ever calls Nexus.
+    pub prospect_repository: Arc<dyn bff_core::ProspectRepository>,
+    /// Repository for [`bff_core::ConsultantActionItem`] (ADR-020 part B) —
+    /// backs `crate::action_items`'s `/action-items*` routes. Deliberately
+    /// separate from [`Self::action_queue_repository`] — see
+    /// `bff_core::consultant_action_item`'s module docs for why.
+    pub action_item_repository: Arc<dyn bff_core::ConsultantActionItemRepository>,
 }
 
 impl FromRef<AppState> for PrometheusHandle {

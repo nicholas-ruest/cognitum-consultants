@@ -10,6 +10,20 @@
 //! (PROMPT-15's established pattern; see the tests for an explicit
 //! call-count proof this short-circuit actually happens).
 //!
+//! # Prospect pipeline routes (ADR-020 part A)
+//! `/sales/prospects*` are a second, unrelated group of routes on this same
+//! router — CRUD plus a dedicated stage-transition endpoint over
+//! [`bff_core::Prospect`], gated by the same `SALES_CAPABILITY` permission
+//! check as the Nexus-backed routes above, but **never calling Nexus at
+//! all**: a `Prospect` is entirely consultant-authored data this repo owns
+//! end-to-end (ADR-020), so these handlers only ever talk to
+//! [`AppState::prospect_repository`]. Every mutating route loads the target
+//! prospect first and compares `Prospect::consultant_id()` against the
+//! session, returning `404` (never `403`) for an id that doesn't exist or
+//! belongs to a different consultant — the same "can't distinguish 'not
+//! yours' from 'doesn't exist'" convention `crate::notifications`'s write
+//! routes already establish.
+//!
 //! # Critical invariant: no re-adjudication of `creation_allowed`
 //! Per `anti-corruption-layers.md` §1 step 5 ("the BFF relays this
 //! verbatim... no `AccountClaimResult` invariant in this repo re-derives or
@@ -59,13 +73,16 @@
 //! command method, because each handler only ever has one gateway field in
 //! scope for the method it calls.
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
-use serde::Deserialize;
+use bff_core::{Prospect, ProspectError, ProspectNote, ProspectStage};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use uuid::Uuid;
 
 use crate::session::{self, AppState};
 use auth::Session;
@@ -193,6 +210,288 @@ pub async fn submit_referral(
     }
 }
 
+// --- Prospect pipeline routes (ADR-020 part A) ---
+
+/// Wire shape for one note, returned as part of [`ProspectDto`].
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ProspectNoteDto {
+    pub id: Uuid,
+    pub body: String,
+    pub author_consultant_id: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<&ProspectNote> for ProspectNoteDto {
+    fn from(note: &ProspectNote) -> Self {
+        Self {
+            id: note.id(),
+            body: note.body().to_owned(),
+            author_consultant_id: note.author_consultant_id().to_owned(),
+            created_at: note.created_at(),
+        }
+    }
+}
+
+/// Wire shape for one prospect, returned by every prospect route below.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ProspectDto {
+    pub id: Uuid,
+    pub company_name: String,
+    pub contact_name: Option<String>,
+    pub stage: String,
+    pub notes: Vec<ProspectNoteDto>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<&Prospect> for ProspectDto {
+    fn from(prospect: &Prospect) -> Self {
+        Self {
+            id: prospect.id(),
+            company_name: prospect.company_name().to_owned(),
+            contact_name: prospect.contact_name().map(str::to_owned),
+            stage: prospect.stage().as_str().to_owned(),
+            notes: prospect.notes().iter().map(ProspectNoteDto::from).collect(),
+            created_at: prospect.created_at(),
+            updated_at: prospect.updated_at(),
+        }
+    }
+}
+
+/// `POST /api/sales/prospects` request body.
+#[derive(Debug, Deserialize)]
+pub struct CreateProspectRequest {
+    pub company_name: String,
+    #[serde(default)]
+    pub contact_name: Option<String>,
+}
+
+/// `PATCH /api/sales/prospects/{id}` request body — company/contact fields
+/// only; stage changes go through the dedicated `/stage` route (module
+/// docs) so they're validated by [`Prospect::transition_stage`], not an
+/// arbitrary field write.
+///
+/// **Known limitation**: `contact_name` cannot currently be *cleared* back
+/// to `None` once set — a plain `Option<String>` can't distinguish "field
+/// omitted from the request" (keep the existing value) from "field
+/// explicitly set to `null`" (clear it); both deserialize to `None`. Fixing
+/// this needs the `Option<Option<String>>`-with-custom-deserializer pattern
+/// (omitted → outer `None`, `null` → `Some(None)`, a string → `Some(Some(..))`).
+/// Left as a follow-up rather than done here — this only affects clearing
+/// an already-set `contact_name`, not any other read/write path.
+#[derive(Debug, Deserialize)]
+pub struct PatchProspectRequest {
+    #[serde(default)]
+    pub company_name: Option<String>,
+    #[serde(default)]
+    pub contact_name: Option<String>,
+}
+
+/// `POST /api/sales/prospects/{id}/notes` request body.
+#[derive(Debug, Deserialize)]
+pub struct AddProspectNoteRequest {
+    pub body: String,
+}
+
+/// `POST /api/sales/prospects/{id}/stage` request body.
+#[derive(Debug, Deserialize)]
+pub struct TransitionProspectStageRequest {
+    pub stage: String,
+}
+
+fn not_found() -> Response {
+    error_response(StatusCode::NOT_FOUND, "not found")
+}
+
+fn prospect_error_response(err: ProspectError) -> Response {
+    match err {
+        ProspectError::InvalidStageTransition { .. } => error_response(StatusCode::UNPROCESSABLE_ENTITY, err.to_string()),
+        _ => error_response(StatusCode::BAD_REQUEST, err.to_string()),
+    }
+}
+
+/// `GET /api/sales/prospects`: the authenticated consultant's prospects,
+/// newest first.
+pub async fn list_prospects(State(state): State<AppState>, Extension(session): Extension<Session>) -> Response {
+    if !state.permission_cache.is_permitted(&session.consultant_id, SALES_CAPABILITY).await {
+        return forbidden();
+    }
+
+    match state.prospect_repository.find_by_consultant_id(&session.consultant_id).await {
+        Ok(prospects) => Json(prospects.iter().map(ProspectDto::from).collect::<Vec<_>>()).into_response(),
+        Err(err) => {
+            tracing::error!(error = %err, consultant_id = %session.consultant_id, "prospect list failed");
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to load prospects")
+        }
+    }
+}
+
+/// `POST /api/sales/prospects`: creates a new prospect at
+/// [`ProspectStage::initial`] for the authenticated consultant.
+pub async fn create_prospect(
+    State(state): State<AppState>,
+    Extension(session): Extension<Session>,
+    Json(body): Json<CreateProspectRequest>,
+) -> Response {
+    if !state.permission_cache.is_permitted(&session.consultant_id, SALES_CAPABILITY).await {
+        return forbidden();
+    }
+
+    let prospect = match Prospect::new(&session.consultant_id, body.company_name, body.contact_name, Utc::now()) {
+        Ok(prospect) => prospect,
+        Err(err) => return prospect_error_response(err),
+    };
+
+    if let Err(err) = state.prospect_repository.save(&prospect).await {
+        tracing::error!(error = %err, consultant_id = %session.consultant_id, "prospect save failed");
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to save prospect");
+    }
+
+    (StatusCode::CREATED, Json(ProspectDto::from(&prospect))).into_response()
+}
+
+/// Loads the prospect for `id`, returning `404` (never `403`, per the
+/// module docs) if it doesn't exist or belongs to a different consultant.
+/// Shared by every route below that acts on one existing prospect.
+async fn load_owned_prospect(state: &AppState, session: &Session, id: Uuid) -> Result<Prospect, Response> {
+    let existing = state.prospect_repository.find_by_id(id).await.map_err(|err| {
+        tracing::error!(error = %err, prospect_id = %id, "prospect lookup failed");
+        error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to load prospect")
+    })?;
+
+    match existing {
+        Some(prospect) if prospect.consultant_id() == session.consultant_id => Ok(prospect),
+        _ => Err(not_found()),
+    }
+}
+
+/// `GET /api/sales/prospects/{id}`.
+pub async fn get_prospect(
+    State(state): State<AppState>,
+    Extension(session): Extension<Session>,
+    Path(id): Path<Uuid>,
+) -> Response {
+    if !state.permission_cache.is_permitted(&session.consultant_id, SALES_CAPABILITY).await {
+        return forbidden();
+    }
+
+    match load_owned_prospect(&state, &session, id).await {
+        Ok(prospect) => Json(ProspectDto::from(&prospect)).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// `PATCH /api/sales/prospects/{id}`: updates `company_name`/`contact_name`
+/// only — see [`PatchProspectRequest`]'s doc comment for why stage isn't
+/// accepted here.
+pub async fn patch_prospect(
+    State(state): State<AppState>,
+    Extension(session): Extension<Session>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PatchProspectRequest>,
+) -> Response {
+    if !state.permission_cache.is_permitted(&session.consultant_id, SALES_CAPABILITY).await {
+        return forbidden();
+    }
+
+    let mut prospect = match load_owned_prospect(&state, &session, id).await {
+        Ok(prospect) => prospect,
+        Err(response) => return response,
+    };
+
+    let company_name = body.company_name.unwrap_or_else(|| prospect.company_name().to_owned());
+    let contact_name = match body.contact_name {
+        Some(name) => Some(name),
+        None => prospect.contact_name().map(str::to_owned),
+    };
+
+    prospect = match Prospect::from_parts(
+        prospect.id(),
+        prospect.consultant_id().to_owned(),
+        company_name,
+        contact_name,
+        prospect.stage(),
+        prospect.notes().to_vec(),
+        prospect.created_at(),
+        Utc::now(),
+    ) {
+        Ok(prospect) => prospect,
+        Err(err) => return prospect_error_response(err),
+    };
+
+    if let Err(err) = state.prospect_repository.save(&prospect).await {
+        tracing::error!(error = %err, prospect_id = %id, "prospect save failed");
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to save prospect");
+    }
+
+    Json(ProspectDto::from(&prospect)).into_response()
+}
+
+/// `POST /api/sales/prospects/{id}/notes`: appends a note
+/// ([`Prospect::add_note`], invariant 4 — append-only).
+pub async fn add_prospect_note(
+    State(state): State<AppState>,
+    Extension(session): Extension<Session>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<AddProspectNoteRequest>,
+) -> Response {
+    if !state.permission_cache.is_permitted(&session.consultant_id, SALES_CAPABILITY).await {
+        return forbidden();
+    }
+
+    let mut prospect = match load_owned_prospect(&state, &session, id).await {
+        Ok(prospect) => prospect,
+        Err(response) => return response,
+    };
+
+    if let Err(err) = prospect.add_note(body.body, &session.consultant_id, Utc::now()) {
+        return prospect_error_response(err);
+    }
+
+    if let Err(err) = state.prospect_repository.save(&prospect).await {
+        tracing::error!(error = %err, prospect_id = %id, "prospect save failed");
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to save prospect");
+    }
+
+    Json(ProspectDto::from(&prospect)).into_response()
+}
+
+/// `POST /api/sales/prospects/{id}/stage`: transitions the prospect's stage
+/// via [`Prospect::transition_stage`] — the only way this repo ever changes
+/// a prospect's stage, so invariant 3's transition matrix is always
+/// enforced, never bypassed by a generic field write.
+pub async fn transition_prospect_stage(
+    State(state): State<AppState>,
+    Extension(session): Extension<Session>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<TransitionProspectStageRequest>,
+) -> Response {
+    if !state.permission_cache.is_permitted(&session.consultant_id, SALES_CAPABILITY).await {
+        return forbidden();
+    }
+
+    let stage: ProspectStage = match body.stage.parse() {
+        Ok(stage) => stage,
+        Err(_) => return error_response(StatusCode::BAD_REQUEST, format!("unknown prospect stage: {:?}", body.stage)),
+    };
+
+    let mut prospect = match load_owned_prospect(&state, &session, id).await {
+        Ok(prospect) => prospect,
+        Err(response) => return response,
+    };
+
+    if let Err(err) = prospect.transition_stage(stage, Utc::now()) {
+        return prospect_error_response(err);
+    }
+
+    if let Err(err) = state.prospect_repository.save(&prospect).await {
+        tracing::error!(error = %err, prospect_id = %id, "prospect save failed");
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, "failed to save prospect");
+    }
+
+    Json(ProspectDto::from(&prospect)).into_response()
+}
+
 /// Builds the `/api/sales/*` sub-router, with the same
 /// [`session::require_session`] middleware [`session::protected_router`]
 /// applies to every other protected route in this repo — an
@@ -203,6 +502,10 @@ pub fn sales_router(state: AppState) -> Router<AppState> {
         .route("/sales/lead-conflict-check", post(lead_conflict_check))
         .route("/sales/request-collaboration", post(request_collaboration))
         .route("/sales/submit-referral", post(submit_referral))
+        .route("/sales/prospects", get(list_prospects).post(create_prospect))
+        .route("/sales/prospects/{id}", get(get_prospect).patch(patch_prospect))
+        .route("/sales/prospects/{id}/notes", post(add_prospect_note))
+        .route("/sales/prospects/{id}/stage", post(transition_prospect_stage))
         .layer(axum::middleware::from_fn_with_state(state, session::require_session))
 }
 
@@ -557,7 +860,7 @@ mod tests {
             Arc::new(persistence::PgWorkflowSessionRepository::new(pool.clone()));
 
         let state = AppState {
-            db_pool: pool,
+            db_pool: pool.clone(),
             session_provider,
             dev_session_provider: Some(dev_session_provider),
             firebase_session_provider: None,
@@ -588,6 +891,8 @@ mod tests {
                 "test-audience".to_owned(),
                 None,
             )),
+            prospect_repository: Arc::new(persistence::PgProspectRepository::new(pool.clone())),
+            action_item_repository: Arc::new(persistence::PgConsultantActionItemRepository::new(pool.clone())),
         };
 
         let router = Router::new().nest("/api", sales_router(state.clone())).with_state(state);
@@ -715,5 +1020,175 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(mock_gateway.calls(), 0, "the 403 short-circuit must happen before any gateway call");
+    }
+
+    // --- Prospect pipeline routes (ADR-020 part A) ---
+
+    fn get_request(cookie: &Cookie<'static>, path: &str) -> Request<Body> {
+        Request::builder().method("GET").uri(path).header("cookie", cookie.to_string()).body(Body::empty()).unwrap()
+    }
+
+    fn patch_request(cookie: &Cookie<'static>, path: &str, body: Value) -> Request<Body> {
+        Request::builder()
+            .method("PATCH")
+            .uri(path)
+            .header("cookie", cookie.to_string())
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn create_prospect_returns_201_and_the_new_prospect_at_the_initial_stage() {
+        let mock_gateway = Arc::new(default_mock_sales_gateway());
+        let (router, cookie, _container) = test_app(vec!["sales"], mock_gateway).await;
+
+        let request = post_request(&cookie, "/api/sales/prospects", json!({ "company_name": "Acme Corp" }));
+        let response = router.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = response_json(response).await;
+        assert_eq!(body["company_name"], "Acme Corp");
+        assert_eq!(body["stage"], "contacted");
+        assert_eq!(body["notes"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn create_prospect_returns_403_when_unpermitted_for_sales() {
+        let mock_gateway = Arc::new(default_mock_sales_gateway());
+        let (router, cookie, _container) = test_app(vec![], mock_gateway).await;
+
+        let request = post_request(&cookie, "/api/sales/prospects", json!({ "company_name": "Acme Corp" }));
+        let response = router.oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn list_prospects_returns_only_the_authenticated_consultants_prospects() {
+        let mock_gateway = Arc::new(default_mock_sales_gateway());
+        let (router, cookie, _container) = test_app(vec!["sales"], mock_gateway).await;
+
+        router
+            .clone()
+            .oneshot(post_request(&cookie, "/api/sales/prospects", json!({ "company_name": "Acme Corp" })))
+            .await
+            .unwrap();
+        router
+            .clone()
+            .oneshot(post_request(&cookie, "/api/sales/prospects", json!({ "company_name": "Globex" })))
+            .await
+            .unwrap();
+
+        let response = router.oneshot(get_request(&cookie, "/api/sales/prospects")).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response_json(response).await;
+        let companies: Vec<&str> = body.as_array().unwrap().iter().map(|p| p["company_name"].as_str().unwrap()).collect();
+        assert_eq!(companies.len(), 2);
+        assert!(companies.contains(&"Acme Corp"));
+        assert!(companies.contains(&"Globex"));
+    }
+
+    #[tokio::test]
+    async fn get_prospect_returns_404_for_an_unknown_id() {
+        let mock_gateway = Arc::new(default_mock_sales_gateway());
+        let (router, cookie, _container) = test_app(vec!["sales"], mock_gateway).await;
+
+        let response = router.oneshot(get_request(&cookie, "/api/sales/prospects/00000000-0000-0000-0000-000000000000")).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn transition_prospect_stage_moves_forward_through_the_funnel() {
+        let mock_gateway = Arc::new(default_mock_sales_gateway());
+        let (router, cookie, _container) = test_app(vec!["sales"], mock_gateway).await;
+
+        let create_response = router
+            .clone()
+            .oneshot(post_request(&cookie, "/api/sales/prospects", json!({ "company_name": "Acme Corp" })))
+            .await
+            .unwrap();
+        let created = response_json(create_response).await;
+        let id = created["id"].as_str().unwrap();
+
+        let response = router
+            .oneshot(post_request(&cookie, &format!("/api/sales/prospects/{id}/stage"), json!({ "stage": "appointment_scheduled" })))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["stage"], "appointment_scheduled");
+    }
+
+    #[tokio::test]
+    async fn transition_prospect_stage_rejects_skipping_ahead_in_the_funnel() {
+        let mock_gateway = Arc::new(default_mock_sales_gateway());
+        let (router, cookie, _container) = test_app(vec!["sales"], mock_gateway).await;
+
+        let create_response = router
+            .clone()
+            .oneshot(post_request(&cookie, "/api/sales/prospects", json!({ "company_name": "Acme Corp" })))
+            .await
+            .unwrap();
+        let created = response_json(create_response).await;
+        let id = created["id"].as_str().unwrap();
+
+        let response = router
+            .oneshot(post_request(&cookie, &format!("/api/sales/prospects/{id}/stage"), json!({ "stage": "proposal_sent" })))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn add_prospect_note_appends_and_returns_it() {
+        let mock_gateway = Arc::new(default_mock_sales_gateway());
+        let (router, cookie, _container) = test_app(vec!["sales"], mock_gateway).await;
+
+        let create_response = router
+            .clone()
+            .oneshot(post_request(&cookie, "/api/sales/prospects", json!({ "company_name": "Acme Corp" })))
+            .await
+            .unwrap();
+        let created = response_json(create_response).await;
+        let id = created["id"].as_str().unwrap();
+
+        let response = router
+            .oneshot(post_request(&cookie, &format!("/api/sales/prospects/{id}/notes"), json!({ "body": "First call went well." })))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["notes"].as_array().unwrap().len(), 1);
+        assert_eq!(body["notes"][0]["body"], "First call went well.");
+    }
+
+    #[tokio::test]
+    async fn patch_prospect_updates_company_name_and_leaves_stage_unchanged() {
+        let mock_gateway = Arc::new(default_mock_sales_gateway());
+        let (router, cookie, _container) = test_app(vec!["sales"], mock_gateway).await;
+
+        let create_response = router
+            .clone()
+            .oneshot(post_request(&cookie, "/api/sales/prospects", json!({ "company_name": "Acme Corp" })))
+            .await
+            .unwrap();
+        let created = response_json(create_response).await;
+        let id = created["id"].as_str().unwrap();
+
+        let response = router
+            .oneshot(patch_request(&cookie, &format!("/api/sales/prospects/{id}"), json!({ "company_name": "Acme Corporation" })))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_json(response).await;
+        assert_eq!(body["company_name"], "Acme Corporation");
+        assert_eq!(body["stage"], "contacted", "PATCH must never change stage");
     }
 }

@@ -58,6 +58,8 @@ export const queryKeys = {
     all: capabilityRoot('sales'),
     /** Illustrative — mirrors ADR-015's example; no live route until PROMPT-24+. */
     conflicts: (consultantId: string) => capabilityKey('sales', 'conflicts', consultantId),
+    /** `GET`/`POST /api/sales/prospects*` (ADR-020 part A) query key. */
+    prospects: (consultantId: string) => capabilityKey('sales', 'prospects', consultantId),
   },
   commit: {
     all: capabilityRoot('commit'),
@@ -155,4 +157,17 @@ export function notificationsQueryKey(consultantId: string) {
  */
 export function actionQueueQueryKey(consultantId: string) {
   return ['action-queue', consultantId] as const
+}
+
+/**
+ * `GET`/`POST`/`PATCH /api/action-items*` (ADR-020 part B) query key:
+ * `['action-items', consultantId]`. Deliberately not routed through
+ * `queryKeys`/`capabilityKey` — same "cross-cutting BFF aggregate, not a
+ * `features/<capability>` resource" rationale as {@link actionQueueQueryKey}
+ * above, and for the same reason `bff_core::ConsultantActionItem` is kept
+ * separate from `ActionQueueEntry` server-side (ADR-020): a consultant's own
+ * checklist isn't owned by any single one of the nine capability slots.
+ */
+export function actionItemsQueryKey(consultantId: string) {
+  return ['action-items', consultantId] as const
 }

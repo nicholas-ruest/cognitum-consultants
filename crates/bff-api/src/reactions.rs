@@ -423,6 +423,8 @@ mod tests {
             event_bus: Arc::new(EventBus::default()),
             event_notify_publisher: Arc::new(EventBus::default()),
             google_identity_verifier: never_configured_verifier(),
+            prospect_repository: Arc::new(persistence::PgProspectRepository::new(pool.clone())),
+            action_item_repository: Arc::new(persistence::PgConsultantActionItemRepository::new(pool.clone())),
         };
 
         (state, container)
