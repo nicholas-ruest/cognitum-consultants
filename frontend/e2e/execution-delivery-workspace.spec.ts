@@ -96,7 +96,7 @@ test('logs in, sees the delivery workspace, requests task completion through the
   expect(taskCompletionRequests[0].body).toEqual({ task_id: 'task-1', consultant_id: 'dev-consultant-001' })
 
   // 5. Queue a `TaskAssigned` event for the mock Nexus server's *next*
-  // `events/v1/poll` response, exactly like `notifications-sse.spec.ts`
+  // `api/v1/events/poll` response, exactly like `notifications-sse.spec.ts`
   // does for `referral_submitted` — `bff-api`'s background polling loop
   // picks it up on its own schedule.
   const originEventId = `e2e-execution-${Date.now()}`

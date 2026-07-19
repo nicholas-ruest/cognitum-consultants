@@ -345,11 +345,11 @@ async fn main() {
         persistence::PgNotifyPublisher::new(db_pool.clone(), bff_core::EVENT_NOTIFY_CHANNEL),
     );
 
-    // Events-poll transport (PROMPT-30, ADR-011): `events/v1/poll` is a
-    // read (idempotent query, no side effect), so per ADR-016 it gets the
-    // read-timeout budget wrapped in `RetryingTransport`, same convention
-    // as `armor_transport` above and `sales_query_transport`'s read-side
-    // counterpart.
+    // Events-poll transport (PROMPT-30, ADR-011): `api/v1/events/poll`
+    // (ADR-030 §3) is a read (idempotent query, no side effect), so per
+    // ADR-016 it gets the read-timeout budget wrapped in `RetryingTransport`,
+    // same convention as `armor_transport` above and `sales_query_transport`'s
+    // read-side counterpart.
     let events_base_transport = nexus_client::ReqwestNexusTransport::new(&cfg.nexus_endpoint_url)
         .unwrap_or_else(|err| panic!("invalid nexus_endpoint_url {:?}: {err}", cfg.nexus_endpoint_url));
     let events_timeout_transport =

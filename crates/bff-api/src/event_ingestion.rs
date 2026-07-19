@@ -17,14 +17,39 @@
 //! including this one, still ends up feeding its own local `EventBus` via
 //! that bridge's `LISTEN` loop instead of losing delivery entirely).
 //!
-//! # Provisional endpoint (ADR-007 framing: Nexus's real contract is unknown)
-//! `GET events/v1/poll[?since=<cursor>]`, expected to return a bare JSON
-//! array of [`CapabilityEventReceived`] — no wrapping envelope, matching the
-//! "a `Vec<CapabilityEventReceived>` per poll" shape this unit's own prompt
-//! describes. This is a guess, not a confirmed contract (same disclaimer as
-//! `nexus_client::sales`'s provisional `sales/v1/...` paths) — update
-//! [`EVENTS_POLL_PATH`]/[`fetch_events`] once Nexus's actual events-poll
-//! contract is known.
+//! # Events-poll endpoint (ADR-030: nexus's real consumer-poll contract)
+//! `GET api/v1/events/poll?consumer=<repo_id>[&since=<cursor>]`. ADR-030 §3
+//! built this as a real, bounded, per-consumer feed (org-scoped per ADR-020)
+//! to replace the earlier guessed `events/v1/poll` path, which never existed
+//! on nexus-server and 404'd — the same class of guessed-path gap ADR-029
+//! closed for capability calls. `consumer` is this repo's declared `repo_id`
+//! ([`EVENTS_POLL_CONSUMER`]); nexus uses it to scope the feed to this
+//! consumer's own org's events. The `api/v1/` prefix lives in
+//! [`EVENTS_POLL_PATH`] itself (not the configured base URL, which is the
+//! bare host), matching `nexus_client`'s `api/v1/capabilities/...` join
+//! convention.
+//!
+//! ## Response shape: nexus `EventEnvelope`, mapped to `CapabilityEventReceived`
+//! The route returns a bare JSON array of nexus's own `EventEnvelope`
+//! objects (NOT this repo's [`CapabilityEventReceived`] directly — they share
+//! only a few fields). [`fetch_events`] deserializes into the local
+//! [`EventEnvelope`] mirror (independent-repo, no cross-Cargo-dep, same
+//! pattern as ADR-029's capability structs) and maps each into a
+//! [`CapabilityEventReceived`] via [`envelope_into_received`]. The
+//! envelope-level fields map 1:1 (`producer_repo`→`origin_capability`,
+//! `event_id`→`origin_event_id`, `event_type`→`event_type`,
+//! `occurred_at`→`received_at`); the BFF-domain projection fields
+//! (`summary`, `deep_link`, `consultant_id`, `related_origin_event_id`,
+//! `related_proposal_id`) are read from the envelope's event-type-specific
+//! `payload`. That payload mapping is **provisional** — nexus's real
+//! per-`event_type` payload schema isn't declared yet (this repo currently
+//! consumes zero event types in nexus's `consumers.json`, so the feed
+//! returns `[]` today and no real payload exists to confirm against), so it
+//! follows the same "read what's structurally required from the rough
+//! payload and flag it pending nexus's real contract" convention
+//! [`CapabilityEventReceived::consultant_id`]/`related_proposal_id` already
+//! document — see [`envelope_into_received`] for the exact field rules and
+//! defaults.
 //!
 //! # Two dedup layers — do not confuse them
 //! 1. **Cursor/watermark (this module, primary/efficiency mechanism)**:
@@ -58,8 +83,16 @@ use nexus_client::{NexusRequest, NexusTransport, NexusTransportError};
 use reqwest::Method;
 use reqwest::header::HeaderMap;
 
-/// Provisional Nexus events-poll endpoint path — see the module docs.
-const EVENTS_POLL_PATH: &str = "events/v1/poll";
+/// Nexus's real consumer events-poll route (ADR-030 §3). Carries the full
+/// `api/v1/` prefix because the configured base URL is the bare host (same
+/// convention as `nexus_client`'s `api/v1/capabilities/...` path).
+const EVENTS_POLL_PATH: &str = "api/v1/events/poll";
+
+/// This repo's declared `repo_id`, sent as the `consumer` query param so
+/// nexus scopes the events feed to this consumer's own org (ADR-030 §3,
+/// ADR-020). Matches the `cognitum-consultants` entry in nexus's
+/// `config/registries/repos.json`.
+const EVENTS_POLL_CONSUMER: &str = "cognitum-consultants";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PollError {
@@ -84,17 +117,77 @@ pub struct PollOutcome {
     pub cursor: Option<DateTime<Utc>>,
 }
 
-/// Builds the `since`-qualified poll path, percent-encoding the timestamp
-/// query parameter (matching `nexus_client::armor`'s
-/// `url::form_urlencoded::Serializer` convention).
+/// Builds the poll path with the always-present `consumer` query param and,
+/// once the cursor has advanced, the `since` param — percent-encoding both
+/// (matching `nexus_client::armor`'s `url::form_urlencoded::Serializer`
+/// convention). `consumer` is required by nexus on every poll (ADR-030 §3);
+/// `since` is omitted on the very first poll after a restart (no cursor yet).
 fn build_poll_path(since: Option<DateTime<Utc>>) -> String {
-    match since {
-        Some(since) => {
-            let mut query = url::form_urlencoded::Serializer::new(String::new());
-            query.append_pair("since", &since.to_rfc3339());
-            format!("{EVENTS_POLL_PATH}?{}", query.finish())
-        }
-        None => EVENTS_POLL_PATH.to_string(),
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    query.append_pair("consumer", EVENTS_POLL_CONSUMER);
+    if let Some(since) = since {
+        query.append_pair("since", &since.to_rfc3339());
+    }
+    format!("{EVENTS_POLL_PATH}?{}", query.finish())
+}
+
+/// Local mirror of nexus's `EventEnvelope` wire shape (ADR-030 §3), just the
+/// fields this consumer reads. Only the envelope-level fields mapped 1:1 plus
+/// the event-type-specific `payload` are declared; every other envelope field
+/// (`event_version`, `aggregate_id`/`aggregate_type`, `actor`,
+/// `organization_id`, `causation_id`, `correlation_id`, `sequence_number`,
+/// `metadata`) is intentionally ignored via serde's default unknown-field
+/// tolerance — so this struct needs no `nexus_contracts` dependency and is
+/// unaffected by e.g. `Semver`'s exact serde repr. A local plain-serde
+/// struct, never a cross-repo Rust dependency (ADR-007/ADR-029).
+#[derive(Debug, serde::Deserialize)]
+struct EventEnvelope {
+    event_id: String,
+    event_type: String,
+    occurred_at: DateTime<Utc>,
+    producer_repo: String,
+    #[serde(default)]
+    payload: serde_json::Value,
+}
+
+/// Reads a string field from an `EventEnvelope`'s `payload`, if present.
+fn payload_str(payload: &serde_json::Value, key: &str) -> Option<String> {
+    payload.get(key).and_then(serde_json::Value::as_str).map(str::to_owned)
+}
+
+/// Maps a nexus [`EventEnvelope`] into this repo's [`CapabilityEventReceived`]
+/// projection (see the module docs' "Response shape" section).
+///
+/// Envelope-level fields map 1:1. The BFF-domain projection fields are read
+/// from the event-type-specific `payload` by their `CapabilityEventReceived`
+/// field name (`related_proposal_id` also accepts a bare `proposal_id`, the
+/// key nexus's Legal events are expected to carry). This payload mapping is
+/// **provisional** pending nexus's real per-`event_type` payload schema — the
+/// feed is empty until this repo declares consumed event types in nexus's
+/// `consumers.json`, so no real payload exists to confirm it against yet.
+/// Defaults for the two required fields a payload might omit:
+/// - `summary` falls back to `event_type` — an unrecognized/summary-less
+///   event still surfaces something display-safe rather than an empty body.
+/// - `consultant_id` falls back to `""` — an event that names no consultant
+///   in its payload cannot be routed to one; the empty id is a documented,
+///   inert placeholder (it simply won't match any real consultant's feed)
+///   rather than a guess, and will be revisited once the real payload schema
+///   is known. Matches this file's existing conservative-provisional
+///   convention rather than dropping the event silently.
+fn envelope_into_received(env: EventEnvelope) -> CapabilityEventReceived {
+    let EventEnvelope { event_id, event_type, occurred_at, producer_repo, payload } = env;
+    let summary = payload_str(&payload, "summary").unwrap_or_else(|| event_type.clone());
+    CapabilityEventReceived {
+        origin_capability: producer_repo,
+        origin_event_id: event_id,
+        event_type,
+        summary,
+        deep_link: payload_str(&payload, "deep_link"),
+        received_at: occurred_at,
+        consultant_id: payload_str(&payload, "consultant_id").unwrap_or_default(),
+        related_origin_event_id: payload_str(&payload, "related_origin_event_id"),
+        related_proposal_id: payload_str(&payload, "related_proposal_id")
+            .or_else(|| payload_str(&payload, "proposal_id")),
     }
 }
 
@@ -110,7 +203,9 @@ async fn fetch_events(
         return Err(PollError::UnexpectedStatus { status: response.status });
     }
 
-    serde_json::from_value(response.body).map_err(PollError::UnexpectedResponseShape)
+    let envelopes: Vec<EventEnvelope> =
+        serde_json::from_value(response.body).map_err(PollError::UnexpectedResponseShape)?;
+    Ok(envelopes.into_iter().map(envelope_into_received).collect())
 }
 
 /// Runs exactly one poll-and-ingest cycle: fetches whatever batch of
@@ -229,16 +324,32 @@ mod tests {
         Arc::new(ReqwestNexusTransport::with_client(reqwest::Client::new(), &mock_server.uri()).expect("valid url"))
     }
 
+    /// A batch in nexus's real `EventEnvelope` wire shape (ADR-030 §3) — the
+    /// envelope-level fields plus a full complement of the fields
+    /// [`fetch_events`] deliberately ignores (`event_version`, `aggregate_*`,
+    /// `actor`, `organization_id`, `correlation_id`, `metadata`), so these
+    /// tests exercise [`envelope_into_received`] against the actual shape and
+    /// prove the ignored fields don't trip deserialization. The BFF-domain
+    /// projection fields live in `payload`, per the mapping.
     fn event_batch_body() -> serde_json::Value {
         serde_json::json!([
             {
-                "origin_capability": "sales",
-                "origin_event_id": "cra-1",
+                "event_id": "cra-1",
                 "event_type": "collaboration_request_acknowledged",
-                "summary": "Sales acknowledged your collaboration request.",
-                "deep_link": "https://app.example.com/sales/collab/1",
-                "received_at": "2026-01-01T00:00:00Z",
-                "consultant_id": "consultant-1"
+                "event_version": {"major": 1, "minor": 0, "patch": 0},
+                "occurred_at": "2026-01-01T00:00:00Z",
+                "producer_repo": "sales",
+                "aggregate_id": "collab-1",
+                "aggregate_type": "collaboration_request",
+                "organization_id": "org-1",
+                "actor": {"user_id": "sales-user-9", "service_account": null, "role": "sales-rep"},
+                "correlation_id": "corr-1",
+                "payload": {
+                    "summary": "Sales acknowledged your collaboration request.",
+                    "deep_link": "https://app.example.com/sales/collab/1",
+                    "consultant_id": "consultant-1"
+                },
+                "metadata": {}
             }
         ])
     }
@@ -267,7 +378,7 @@ mod tests {
 
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/events/v1/poll"))
+            .and(path("/api/v1/events/poll"))
             .respond_with(ResponseTemplate::new(200).set_body_json(event_batch_body()))
             .mount(&mock_server)
             .await;
@@ -320,11 +431,15 @@ mod tests {
         // The second request actually carried the cursor forward as `since`
         // — proof the watermark mechanism (layer 1) is wired, not just the
         // idempotent-save safety net (layer 2) papering over it never being
-        // used.
+        // used. Both polls always carry the `consumer` param (ADR-030 §3);
+        // only the second (post-cursor) poll carries `since`.
         let requests = mock_server.received_requests().await.expect("request recording enabled by default");
         assert_eq!(requests.len(), 2);
-        assert!(requests[0].url.query().is_none(), "the first poll has no cursor yet");
+        let first_query = requests[0].url.query().expect("every poll carries the consumer param");
+        assert!(first_query.contains("consumer=cognitum-consultants"), "expected consumer= param, got {first_query:?}");
+        assert!(!first_query.contains("since="), "the first poll has no cursor yet, got {first_query:?}");
         let second_query = requests[1].url.query().expect("second poll should carry a since= cursor");
+        assert!(second_query.contains("consumer=cognitum-consultants"), "expected consumer= param, got {second_query:?}");
         assert!(second_query.contains("since="), "expected a since= query param, got {second_query:?}");
     }
 
@@ -340,7 +455,7 @@ mod tests {
 
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/events/v1/poll"))
+            .and(path("/api/v1/events/poll"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
             .mount(&mock_server)
             .await;
@@ -375,7 +490,7 @@ mod tests {
 
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/events/v1/poll"))
+            .and(path("/api/v1/events/poll"))
             .respond_with(ResponseTemplate::new(503))
             .mount(&mock_server)
             .await;
@@ -392,5 +507,72 @@ mod tests {
         .await;
 
         assert!(matches!(result, Err(PollError::UnexpectedStatus { .. })));
+    }
+
+    // --- Pure unit tests for the EventEnvelope -> CapabilityEventReceived
+    // mapping (no Postgres/container needed). ---
+
+    fn envelope_from(value: serde_json::Value) -> EventEnvelope {
+        serde_json::from_value(value).expect("valid EventEnvelope")
+    }
+
+    #[test]
+    fn maps_envelope_level_fields_and_reads_projection_fields_from_payload() {
+        // The full real EventEnvelope shape, including the fields the mapping
+        // ignores — proves they neither break deserialization nor leak in.
+        let batch = event_batch_body();
+        let env = envelope_from(batch.as_array().unwrap()[0].clone());
+        let received = envelope_into_received(env);
+
+        assert_eq!(received.origin_capability, "sales"); // <- producer_repo
+        assert_eq!(received.origin_event_id, "cra-1"); // <- event_id
+        assert_eq!(received.event_type, "collaboration_request_acknowledged");
+        assert_eq!(received.received_at, "2026-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap()); // <- occurred_at
+        assert_eq!(received.summary, "Sales acknowledged your collaboration request."); // <- payload
+        assert_eq!(received.deep_link.as_deref(), Some("https://app.example.com/sales/collab/1")); // <- payload
+        assert_eq!(received.consultant_id, "consultant-1"); // <- payload
+        assert_eq!(received.related_origin_event_id, None);
+        assert_eq!(received.related_proposal_id, None);
+    }
+
+    #[test]
+    fn summary_falls_back_to_event_type_when_payload_omits_it() {
+        let env = envelope_from(serde_json::json!({
+            "event_id": "e-1",
+            "event_type": "task_assigned",
+            "occurred_at": "2026-01-01T00:00:00Z",
+            "producer_repo": "execution",
+            "payload": { "consultant_id": "consultant-1" }
+        }));
+        let received = envelope_into_received(env);
+        assert_eq!(received.summary, "task_assigned", "summary should fall back to event_type");
+        assert_eq!(received.consultant_id, "consultant-1");
+    }
+
+    #[test]
+    fn consultant_id_defaults_to_empty_when_payload_omits_it() {
+        let env = envelope_from(serde_json::json!({
+            "event_id": "e-2",
+            "event_type": "proposal_status_changed",
+            "occurred_at": "2026-01-01T00:00:00Z",
+            "producer_repo": "commit",
+            "payload": { "summary": "Status changed." }
+        }));
+        let received = envelope_into_received(env);
+        assert_eq!(received.consultant_id, "", "a payload with no consultant_id yields the documented empty placeholder");
+        assert_eq!(received.summary, "Status changed.");
+    }
+
+    #[test]
+    fn related_proposal_id_reads_the_bare_proposal_id_alias_from_payload() {
+        let env = envelope_from(serde_json::json!({
+            "event_id": "e-3",
+            "event_type": "legal_clause_updated",
+            "occurred_at": "2026-01-01T00:00:00Z",
+            "producer_repo": "legal",
+            "payload": { "summary": "Clause updated.", "consultant_id": "consultant-1", "proposal_id": "prop-7" }
+        }));
+        let received = envelope_into_received(env);
+        assert_eq!(received.related_proposal_id.as_deref(), Some("prop-7"));
     }
 }
