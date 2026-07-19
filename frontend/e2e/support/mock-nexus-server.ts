@@ -5,17 +5,40 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * Mock Nexus HTTP server (PROMPT-27) — stands in for `nexus.cognitum.one`
  * at the HTTP boundary, per ADR-007: `nexus-client`'s `ReqwestNexusTransport`
  * only needs `NEXUS_ENDPOINT_URL` pointed at *something* that speaks the
- * provisional `armor/v1/...` / `sales/v1/...` request shapes documented in
- * `crates/nexus-client/src/armor.rs` and `crates/nexus-client/src/sales.rs`
- * — it has no idea (and no way to tell) whether that's the real Nexus or
- * this stand-in. This is the same pattern manual verification used in
- * PROMPT-18/19/23, formalized here as a reusable module so Phase 4
+ * real capability envelope `crates/nexus-client/src/transport.rs`'s
+ * `CapabilityCaller` issues (ADR-029: `POST capabilities/:capability_id`,
+ * body a `CapabilityRequest` envelope, response a `CapabilityResponse`
+ * envelope) — it has no idea (and no way to tell) whether that's the real
+ * Nexus or this stand-in. This is the same pattern manual verification used
+ * in PROMPT-18/19/23, formalized here as a reusable module so Phase 4
  * (PROMPT-34+) can start one of these per capability without re-deriving
  * the wiring.
  *
  * Deliberately plain `node:http` (no Express/msw dependency) — the surface
- * this test needs is four routes with fixed response shapes, which plain
- * `http.createServer` covers with zero added dependencies.
+ * this test needs is one route (plus a handful of test-only inspection
+ * routes and the still-unmigrated events-poll endpoint — see below), which
+ * plain `http.createServer` covers with zero added dependencies.
+ *
+ * # One route, all ten gateways (ADR-029)
+ * `Implement ADR-029: wire consultants-portal off guessed REST paths onto
+ * nexus's real capability envelope` (commit 8ea7a9b) migrated every
+ * `nexus-client` gateway off its own provisional REST-ish path
+ * (`armor/v1/assertions`, `sales/v1/account-claims`, etc.) onto one real
+ * route nexus-server exposes: `POST capabilities/:capability_id`, with the
+ * request/response bodies wrapped in the `CapabilityRequest`/
+ * `CapabilityResponse` envelope `crates/nexus-client/src/transport.rs`
+ * builds and unwraps. This mock was not updated in that commit, so it kept
+ * answering the old per-capability REST paths — invisible until this
+ * harness's own login/e2e regressions were fixed enough to reach an actual
+ * `GET`/`PUT /api/dashboard` call, at which point every dashboard-gating
+ * `is_permitted` check failed (the real `bff-api` was issuing
+ * `POST capabilities/armor.assertions`, this mock 404is on it, `bff-api`
+ * fell back to an empty assertion set) — see this repo's e2e-fix commit
+ * history for the full diagnosis. This file now answers the one real route
+ * instead, dispatching on `capability_id` (and, for the three ids two
+ * gateway methods share — `commit.proposals`, `capacity.profile`,
+ * `execution.task_completions` — on the request payload's shape, exactly
+ * the way each gateway's own module docs describe disambiguating them).
  *
  * # Fixtures are fixed, not dynamically configurable
  * This server always grants the `"sales"`, `"commit"`, `"edu"`, `"capacity"`,
@@ -24,36 +47,36 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * for most company names with the `active_owned_account` fixture —
  * `.plans/ddd/anti-corruption-layers.md` §1's worked example, and the same
  * fixture `crates/bff-api/src/sales.rs`'s own integration tests use
- * (`active_owned_account_fixture()`). Edu's `GET /edu/v1/catalog`
- * (PROMPT-35) always answers with the fixed `LEARNING_CATALOG_FIXTURE`
- * below, matching that module's own inline doc comment. Capacity's
- * `GET`/`POST /capacity/v1/profile` (PROMPT-36) serve a single, stateful
- * `PROFILE_FIXTURE` per `consultant_id`: `GET` returns whatever is currently
- * stored (seeded from `PROFILE_FIXTURE`), and `POST` always accepts the
- * update and overwrites the stored profile with it — see the module docs
- * for why a stateful round-trip was chosen over a fixed
- * always-the-same-response fixture for this one capability. Customer's
- * `GET /customer/v1/context` (PROMPT-37) always answers with the fixed
- * `CUSTOMER_CONTEXT_FIXTURE` below, matching Edu's "fixed, not dynamically
- * configurable" pattern. Execution's `GET /execution/v1/engagements`
- * (PROMPT-38) always answers with the fixed `ENGAGEMENT_SNAPSHOT_FIXTURE`
- * below, same pattern; `POST /execution/v1/task-completions` records every
- * request it receives (mirroring `proposalActions`/`referrals` below) so a
- * spec can assert the BFF forwarded the expected `task_id`/`consultant_id`.
- * Products' `GET /products/v1/catalog` (PROMPT-39) always answers with the
- * fixed `PRODUCT_CATALOG_FIXTURE` below, same "fixed, not dynamically
- * configurable" pattern as Edu/Customer/Execution. Landscape's
- * `GET /landscape/v1/intelligence` (PROMPT-40) always answers with the fixed
- * `INTELLIGENCE_DIGEST_FIXTURE` below, same pattern; `POST
- * /landscape/v1/observations` records every request it receives (mirroring
+ * (`active_owned_account_fixture()`). Edu's catalog capability (PROMPT-35)
+ * always answers with the fixed `LEARNING_CATALOG_FIXTURE` below, matching
+ * that module's own inline doc comment. Capacity's profile capability
+ * (PROMPT-36) serves a single, stateful `PROFILE_FIXTURE` per
+ * `consultant_id`: a read returns whatever is currently stored (seeded from
+ * `PROFILE_FIXTURE`), and a write always accepts the update and overwrites
+ * the stored profile with it — see the module docs for why a stateful
+ * round-trip was chosen over a fixed always-the-same-response fixture for
+ * this one capability. Customer's context capability (PROMPT-37) always
+ * answers with the fixed `CUSTOMER_CONTEXT_FIXTURE` below, matching Edu's
+ * "fixed, not dynamically configurable" pattern. Execution's
+ * `execution.task_completions` capability (PROMPT-38) always answers an
+ * engagements-query payload with the fixed `ENGAGEMENT_SNAPSHOT_FIXTURE`
+ * below, same pattern; a task-completion payload records every request it
+ * receives (mirroring `proposalActions`/`referrals` below) so a spec can
+ * assert the BFF forwarded the expected `task_id`/`consultant_id`.
+ * Products' catalog capability (PROMPT-39) always answers with the fixed
+ * `PRODUCT_CATALOG_FIXTURE` below, same "fixed, not dynamically
+ * configurable" pattern as Edu/Customer/Execution. Landscape's intelligence
+ * capability (PROMPT-40) always answers with the fixed
+ * `INTELLIGENCE_DIGEST_FIXTURE` below, same pattern; its observations
+ * capability records every request it receives (mirroring
  * `taskCompletionRequests`/`capacityProfileUpdates` above) so a spec can
  * assert the BFF forwarded the expected `submitted_by`/`observation_text`.
- * Legal's `GET /legal/v1/clauses` (PROMPT-41) always answers with the fixed
+ * Legal's clauses capability (PROMPT-41) always answers with the fixed
  * `APPROVED_LEGAL_SNIPPET_FIXTURE` below regardless of `proposal_id`/`topic`
  * (this server has no real clause library to filter against), and records
  * every request it receives (mirroring `edu-catalog-requests`/
  * `customer-context-requests` above) so a spec can assert which
- * `proposal_id`/`topic` query param the BFF actually forwarded.
+ * `proposal_id`/`topic` the BFF actually forwarded.
  *
  * # One exception: the `no_match` fixture, by company name (PROMPT-34)
  * `commit-sales-deeplink.spec.ts` needs a `creation_allowed: true` result to
@@ -67,6 +90,14 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * (which uses "Acme Corp") is unaffected. A future test that needs more than
  * these two fixed scenarios should extend this module with a fully
  * configurable fixture rather than adding more hardcoded exceptions.
+ *
+ * # Events-poll: not part of the ADR-029 capability envelope
+ * `bff-api::event_ingestion`'s polling loop calls `events/v1/poll` directly
+ * over a raw `NexusTransport` (`crates/bff-api/src/event_ingestion.rs`),
+ * not through `CapabilityCaller` — ADR-029's migration only touched the ten
+ * `nexus-client` gateways, not this separate polling mechanism. That route
+ * (and the `/_test/...` inspection namespace) is untouched by the ADR-029
+ * rewrite below.
  *
  * # Inspection, not shared JS state
  * Playwright test files run in a worker process separate from
@@ -140,13 +171,13 @@ export interface LearningSnapshot {
 }
 
 /**
- * Fixed `GET /edu/v1/catalog` fixture (PROMPT-35): one completed/certified
- * course, one in-progress course with no certification, and one
- * `not_started` course with a `required` certification (the
- * `LearningDashboard.tsx` "Training Due" heuristic's worked example) —
- * proving the frontend's three-section partition against more than one
- * status combination, mirroring `ACCOUNT_CLAIM_FIXTURE`'s "fixed, not
- * dynamically configurable" rationale above.
+ * Fixed `edu.catalog` fixture (PROMPT-35): one completed/certified course,
+ * one in-progress course with no certification, and one `not_started`
+ * course with a `required` certification (the `LearningDashboard.tsx`
+ * "Training Due" heuristic's worked example) — proving the frontend's
+ * three-section partition against more than one status combination,
+ * mirroring `ACCOUNT_CLAIM_FIXTURE`'s "fixed, not dynamically configurable"
+ * rationale above.
  */
 const LEARNING_CATALOG_FIXTURE: LearningSnapshot[] = [
   {
@@ -188,7 +219,7 @@ export interface ConsultantProfileIntake {
 }
 
 /**
- * Fixed initial `GET /capacity/v1/profile` fixture (PROMPT-36) — seeds the
+ * Fixed initial `capacity.profile` fixture (PROMPT-36) — seeds the
  * per-`consultant_id` stateful store on first read/write. See the module
  * docs for why this one capability's fixture is stateful rather than fixed.
  */
@@ -210,9 +241,9 @@ export interface CustomerContextCard {
 }
 
 /**
- * Fixed `GET /customer/v1/context` fixture (PROMPT-37): one healthy customer
- * and one at-risk customer, proving the frontend's list-plus-detail
- * rendering against more than one `health_status` value — mirroring
+ * Fixed `customer.context` fixture (PROMPT-37): one healthy customer and one
+ * at-risk customer, proving the frontend's list-plus-detail rendering
+ * against more than one `health_status` value — mirroring
  * `LEARNING_CATALOG_FIXTURE`'s "fixed, not dynamically configurable"
  * rationale above.
  */
@@ -243,10 +274,10 @@ export interface ProductReferenceCard {
 }
 
 /**
- * Fixed `GET /products/v1/catalog` fixture (PROMPT-39): one product with a
- * demo asset and one without, proving the frontend's list-plus-detail
- * rendering against both shapes — mirroring `ENGAGEMENT_SNAPSHOT_FIXTURE`'s
- * "fixed, not dynamically configurable" rationale above.
+ * Fixed `products.catalog` fixture (PROMPT-39): one product with a demo
+ * asset and one without, proving the frontend's list-plus-detail rendering
+ * against both shapes — mirroring `ENGAGEMENT_SNAPSHOT_FIXTURE`'s "fixed,
+ * not dynamically configurable" rationale above.
  */
 const PRODUCT_CATALOG_FIXTURE: ProductReferenceCard[] = [
   {
@@ -283,9 +314,9 @@ export interface EngagementSnapshot {
 }
 
 /**
- * Fixed `GET /execution/v1/engagements` fixture (PROMPT-38): one on-track
- * engagement with an assigned task, proving the frontend's
- * list-plus-detail-plus-tasks rendering — mirroring
+ * Fixed `execution.task_completions` (engagements-query payload) fixture
+ * (PROMPT-38): one on-track engagement with an assigned task, proving the
+ * frontend's list-plus-detail-plus-tasks rendering — mirroring
  * `CUSTOMER_CONTEXT_FIXTURE`'s "fixed, not dynamically configurable"
  * rationale above.
  */
@@ -310,9 +341,9 @@ export interface IntelligenceDigestItem {
 }
 
 /**
- * Fixed `GET /landscape/v1/intelligence` fixture (PROMPT-40): one item with
- * a deep link, one without, proving the frontend's digest rendering against
- * both shapes — mirroring `ENGAGEMENT_SNAPSHOT_FIXTURE`'s "fixed, not
+ * Fixed `landscape.intelligence` fixture (PROMPT-40): one item with a deep
+ * link, one without, proving the frontend's digest rendering against both
+ * shapes — mirroring `ENGAGEMENT_SNAPSHOT_FIXTURE`'s "fixed, not
  * dynamically configurable" rationale above.
  */
 const INTELLIGENCE_DIGEST_FIXTURE: IntelligenceDigestItem[] = [
@@ -341,10 +372,9 @@ export interface ApprovedLegalSnippet {
 }
 
 /**
- * Fixed `GET /legal/v1/clauses` fixture (PROMPT-41): two approved clauses,
- * proving the frontend's list rendering — mirroring
- * `CUSTOMER_CONTEXT_FIXTURE`'s "fixed, not dynamically configurable"
- * rationale above.
+ * Fixed `legal.clauses` fixture (PROMPT-41): two approved clauses, proving
+ * the frontend's list rendering — mirroring `CUSTOMER_CONTEXT_FIXTURE`'s
+ * "fixed, not dynamically configurable" rationale above.
  */
 const APPROVED_LEGAL_SNIPPET_FIXTURE: ApprovedLegalSnippet[] = [
   {
@@ -376,6 +406,19 @@ export interface CapabilityEventReceived {
    * `CapabilityEventReceived::related_origin_event_id`.
    */
   related_origin_event_id?: string
+}
+
+/**
+ * Inbound `nexus_contracts::CapabilityRequest` envelope, mirrored from
+ * `crates/nexus-client/src/transport.rs`'s `CapabilityRequest`. This mock
+ * only ever reads `request_id`/`payload` — the identity/bookkeeping fields
+ * (`caller`, `organization_id`, `actor`, `correlation_id`, `metadata`) are
+ * accepted but not asserted on here (no spec currently needs to).
+ */
+interface CapabilityRequestEnvelope {
+  request_id?: string
+  capability_id?: string
+  payload?: Record<string, unknown>
 }
 
 export interface MockNexusServer {
@@ -412,37 +455,38 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 export function startMockNexusServer(port: number): Promise<MockNexusServer> {
   const collaborationRequests: RecordedCommand[] = []
   const referrals: RecordedCommand[] = []
-  // PROMPT-34: proposals created via `POST /commit/v1/proposals`, keyed by
-  // `proposal_id`, so `GET /commit/v1/proposals` (list) and
-  // `POST /commit/v1/proposal-actions` can look them up.
+  // PROMPT-34: proposals created via the `commit.proposals` capability
+  // (create-shaped payload), keyed by `proposal_id`, so the same
+  // capability's list-shaped payload and `commit.proposal_actions` can look
+  // them up.
   const proposals = new Map<string, ProposalSummary>()
   const proposalActions: RecordedCommand[] = []
   let nextProposalNumber = 1
-  // PROMPT-35: `GET /edu/v1/catalog` requests, recorded so a spec can
-  // confirm which `consultant_id` the BFF forwarded.
+  // PROMPT-35: `edu.catalog` requests, recorded so a spec can confirm which
+  // `consultant_id` the BFF forwarded.
   const catalogRequests: RecordedCommand[] = []
   // PROMPT-36: per-`consultant_id` Capacity profile store, seeded lazily
-  // from `PROFILE_FIXTURE` on first `GET`/`POST`, plus a record of every
-  // `POST /capacity/v1/profile` this server received.
+  // from `PROFILE_FIXTURE` on first read/write, plus a record of every
+  // `capacity.profile` write this server received.
   const capacityProfiles = new Map<string, ConsultantProfileIntake>()
   const capacityProfileUpdates: RecordedCommand[] = []
-  // PROMPT-37: `GET /customer/v1/context` requests, recorded so a spec can
-  // confirm which `consultant_id` the BFF forwarded.
+  // PROMPT-37: `customer.context` requests, recorded so a spec can confirm
+  // which `consultant_id` the BFF forwarded.
   const customerContextRequests: RecordedCommand[] = []
-  // PROMPT-38: `POST /execution/v1/task-completions` requests, recorded so a
-  // spec can confirm the BFF forwarded the expected `task_id`/`consultant_id`.
+  // PROMPT-38: `execution.task_completions` (completion-shaped payload)
+  // requests, recorded so a spec can confirm the BFF forwarded the expected
+  // `task_id`/`consultant_id`.
   const taskCompletionRequests: RecordedCommand[] = []
-  // PROMPT-39: `GET /products/v1/catalog` requests, recorded so a spec can
-  // confirm the BFF actually called through to Products (there is no
+  // PROMPT-39: `products.catalog` requests, recorded so a spec can confirm
+  // the BFF actually called through to Products (there is no
   // `consultant_id` to assert on this one — see `products.rs`'s module docs
   // for why — so this just counts/records hits).
   const productCatalogRequests: RecordedCommand[] = []
-  // PROMPT-40: `POST /landscape/v1/observations` requests, recorded so a
-  // spec can confirm the BFF forwarded the expected `submitted_by`/
-  // `observation_text`.
+  // PROMPT-40: `landscape.observations` requests, recorded so a spec can
+  // confirm the BFF forwarded the expected `submitted_by`/`observation_text`.
   const fieldObservations: RecordedCommand[] = []
-  // PROMPT-41: `GET /legal/v1/clauses` requests, recorded so a spec can
-  // confirm which `proposal_id`/`topic` query param the BFF forwarded.
+  // PROMPT-41: `legal.clauses` requests, recorded so a spec can confirm
+  // which `proposal_id`/`topic` the BFF forwarded.
   const legalClauseRequests: RecordedCommand[] = []
   // PROMPT-33 e2e: events queued via `POST /_test/enqueue-event` and
   // drained (returned once, then cleared) on the next `GET
@@ -462,217 +506,222 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
     })
   })
 
+  const CAPABILITIES_PATH_PREFIX = '/capabilities/'
+
   async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? '/', `http://127.0.0.1:${port}`)
     const method = request.method ?? 'GET'
 
-    // Armor ACL (ADR-009, PROMPT-14): grants the "sales" and "commit"
-    // capabilities for whichever consultant_id is asked about, matching
-    // `crates/nexus-client/src/armor.rs`'s `{"assertions": [...]}` envelope.
-    if (method === 'GET' && url.pathname === '/armor/v1/assertions') {
-      const consultantId = url.searchParams.get('consultant_id') ?? 'unknown-consultant'
-      const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
-      sendJson(response, 200, {
-        assertions: [
-          { consultant_id: consultantId, capability: 'sales', scope: 'default', expires_at: expiresAt },
-          { consultant_id: consultantId, capability: 'commit', scope: 'default', expires_at: expiresAt },
-          { consultant_id: consultantId, capability: 'edu', scope: 'default', expires_at: expiresAt },
-          { consultant_id: consultantId, capability: 'capacity', scope: 'default', expires_at: expiresAt },
-          { consultant_id: consultantId, capability: 'customer', scope: 'default', expires_at: expiresAt },
-          { consultant_id: consultantId, capability: 'execution', scope: 'default', expires_at: expiresAt },
-          { consultant_id: consultantId, capability: 'products', scope: 'default', expires_at: expiresAt },
-          { consultant_id: consultantId, capability: 'landscape', scope: 'default', expires_at: expiresAt },
-          { consultant_id: consultantId, capability: 'legal', scope: 'default', expires_at: expiresAt },
-        ],
-      })
-      return
-    }
+    // ADR-029: the one real route every `nexus-client` gateway now calls
+    // through (`CapabilityCaller::call`, `crates/nexus-client/src/transport.rs`)
+    // — see the module docs' "One route, all ten gateways" section.
+    if (method === 'POST' && url.pathname.startsWith(CAPABILITIES_PATH_PREFIX)) {
+      const capabilityId = url.pathname.slice(CAPABILITIES_PATH_PREFIX.length)
+      const envelope = (await readJsonBody(request)) as CapabilityRequestEnvelope
+      const payload = envelope.payload ?? {}
+      const requestId = envelope.request_id
 
-    // Sales account-claim check (ADR-016, PROMPT-24): answers with the
-    // no_match fixture for `NO_MATCH_COMPANY_NAME`, and the
-    // active_owned_account worked example for every other company name —
-    // see the module docs.
-    if (method === 'POST' && url.pathname === '/sales/v1/account-claims') {
-      const body = (await readJsonBody(request)) as { company_name?: string }
-      const fixture = body.company_name === NO_MATCH_COMPANY_NAME ? NO_MATCH_ACCOUNT_CLAIM_FIXTURE : ACCOUNT_CLAIM_FIXTURE
-      sendJson(response, 200, fixture)
-      return
-    }
-
-    if (method === 'POST' && url.pathname === '/sales/v1/collaboration-requests') {
-      const body = await readJsonBody(request)
-      collaborationRequests.push({ path: url.pathname, body, receivedAt: new Date().toISOString() })
-      sendJson(response, 200, {})
-      return
-    }
-
-    if (method === 'POST' && url.pathname === '/sales/v1/referrals') {
-      const body = await readJsonBody(request)
-      referrals.push({ path: url.pathname, body, receivedAt: new Date().toISOString() })
-      sendJson(response, 200, {})
-      return
-    }
-
-    // Commit proposal creation (ADR-016, PROMPT-34): creates and stores a
-    // `ProposalSummary` keyed by a freshly minted `proposal_id`, matching
-    // `crates/nexus-client/src/commit.rs`'s `CreateProposalCommand`/
-    // `ProposalSummary` shapes.
-    if (method === 'POST' && url.pathname === '/commit/v1/proposals') {
-      const body = (await readJsonBody(request)) as { origin_reference: string; consultant_id: string }
-      const proposalId = `proposal-${nextProposalNumber}`
-      nextProposalNumber += 1
-      const proposal: ProposalSummary = {
-        proposal_id: proposalId,
-        title: `${body.origin_reference} Engagement Proposal`,
-        status: 'draft',
-        stage: 'drafting',
-        last_updated_at: new Date().toISOString(),
-        deep_link: `https://commit.cognitum.one/proposals/${proposalId}`,
+      const respond = (responsePayload: unknown): void => {
+        sendJson(response, 200, { request_id: requestId, success: true, payload: responsePayload })
       }
-      proposals.set(proposalId, proposal)
-      sendJson(response, 200, proposal)
+      const now = (): string => new Date().toISOString()
+
+      // Armor ACL (ADR-009, PROMPT-14): grants every capability for
+      // whichever `consultant_id` is asked about, matching
+      // `crates/nexus-client/src/armor.rs`'s `{"assertions": [...]}`
+      // envelope.
+      if (capabilityId === 'armor.assertions') {
+        const consultantId = (payload.consultant_id as string | undefined) ?? 'unknown-consultant'
+        const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        respond({
+          assertions: [
+            { consultant_id: consultantId, capability: 'sales', scope: 'default', expires_at: expiresAt },
+            { consultant_id: consultantId, capability: 'commit', scope: 'default', expires_at: expiresAt },
+            { consultant_id: consultantId, capability: 'edu', scope: 'default', expires_at: expiresAt },
+            { consultant_id: consultantId, capability: 'capacity', scope: 'default', expires_at: expiresAt },
+            { consultant_id: consultantId, capability: 'customer', scope: 'default', expires_at: expiresAt },
+            { consultant_id: consultantId, capability: 'execution', scope: 'default', expires_at: expiresAt },
+            { consultant_id: consultantId, capability: 'products', scope: 'default', expires_at: expiresAt },
+            { consultant_id: consultantId, capability: 'landscape', scope: 'default', expires_at: expiresAt },
+            { consultant_id: consultantId, capability: 'legal', scope: 'default', expires_at: expiresAt },
+          ],
+        })
+        return
+      }
+
+      // Sales account-claim check (ADR-016, PROMPT-24): answers with the
+      // no_match fixture for `NO_MATCH_COMPANY_NAME`, and the
+      // active_owned_account worked example for every other company name —
+      // see the module docs.
+      if (capabilityId === 'sales.account_claims') {
+        const companyName = payload.company_name as string | undefined
+        const fixture = companyName === NO_MATCH_COMPANY_NAME ? NO_MATCH_ACCOUNT_CLAIM_FIXTURE : ACCOUNT_CLAIM_FIXTURE
+        respond(fixture)
+        return
+      }
+
+      if (capabilityId === 'sales.collaboration_requests') {
+        collaborationRequests.push({ path: capabilityId, body: payload, receivedAt: now() })
+        respond({})
+        return
+      }
+
+      if (capabilityId === 'sales.referrals') {
+        referrals.push({ path: capabilityId, body: payload, receivedAt: now() })
+        respond({})
+        return
+      }
+
+      // Commit (ADR-016, PROMPT-34): one capability id serves both
+      // `create_proposal` and `list_proposals` (they shared one REST path
+      // historically — see `crates/nexus-client/src/commit.rs`'s module
+      // docs) — disambiguated here by payload shape, exactly as that
+      // module documents: an `origin_reference`-carrying payload creates,
+      // a bare-`consultant_id` payload lists.
+      if (capabilityId === 'commit.proposals') {
+        if (typeof payload.origin_reference === 'string') {
+          const originReference = payload.origin_reference
+          const proposalId = `proposal-${nextProposalNumber}`
+          nextProposalNumber += 1
+          const proposal: ProposalSummary = {
+            proposal_id: proposalId,
+            title: `${originReference} Engagement Proposal`,
+            status: 'draft',
+            stage: 'drafting',
+            last_updated_at: now(),
+            deep_link: `https://commit.cognitum.one/proposals/${proposalId}`,
+          }
+          proposals.set(proposalId, proposal)
+          respond(proposal)
+          return
+        }
+        respond({ proposals: [...proposals.values()] })
+        return
+      }
+
+      if (capabilityId === 'commit.proposal_actions') {
+        proposalActions.push({ path: capabilityId, body: payload, receivedAt: now() })
+        respond({})
+        return
+      }
+
+      // Edu learning-catalog query (ADR-016, PROMPT-35): always answers
+      // with the fixed `LEARNING_CATALOG_FIXTURE`, matching
+      // `crates/nexus-client/src/edu.rs`'s `LearningCatalogEnvelope`
+      // (`{"snapshots": [...]}`) convention. `consultant_id` is recorded so
+      // a spec can assert the BFF forwarded the authenticated consultant,
+      // the same shape `_test/proposals` proves for Commit.
+      if (capabilityId === 'edu.catalog') {
+        catalogRequests.push({ path: capabilityId, body: { consultant_id: payload.consultant_id ?? null }, receivedAt: now() })
+        respond({ snapshots: LEARNING_CATALOG_FIXTURE })
+        return
+      }
+
+      // Capacity (ADR-016, PROMPT-36): one capability id serves both
+      // `get_own_profile` and `update_own_profile` (see
+      // `crates/nexus-client/src/capacity.rs`'s module docs) —
+      // disambiguated here by payload shape: a `profile_fields`-carrying
+      // payload writes, a bare-`consultant_id` payload reads.
+      if (capabilityId === 'capacity.profile') {
+        if (payload.profile_fields !== undefined) {
+          const consultantId = payload.consultant_id as string
+          const profileFields = payload.profile_fields as ConsultantProfileIntake
+          capacityProfiles.set(consultantId, profileFields)
+          capacityProfileUpdates.push({ path: capabilityId, body: payload, receivedAt: now() })
+          respond({ accepted: true })
+          return
+        }
+        const consultantId = (payload.consultant_id as string | undefined) ?? 'unknown-consultant'
+        const profile = capacityProfiles.get(consultantId) ?? PROFILE_FIXTURE
+        capacityProfiles.set(consultantId, profile)
+        respond(profile)
+        return
+      }
+
+      // Customer assigned-context query (ADR-016, PROMPT-37): always
+      // answers with the fixed `CUSTOMER_CONTEXT_FIXTURE`, matching
+      // `crates/nexus-client/src/customer.rs`'s `CustomerContextEnvelope`
+      // (`{"contexts": [...]}`) convention. `consultant_id` is recorded so
+      // a spec can assert the BFF forwarded the authenticated consultant,
+      // the same shape `_test/edu-catalog-requests` proves for Edu.
+      if (capabilityId === 'customer.context') {
+        customerContextRequests.push({
+          path: capabilityId,
+          body: { consultant_id: payload.consultant_id ?? null },
+          receivedAt: now(),
+        })
+        respond({ contexts: CUSTOMER_CONTEXT_FIXTURE })
+        return
+      }
+
+      // Execution (ADR-016, PROMPT-38): one capability id serves both
+      // `request_assigned_engagements` and `confirm_task_completion` (see
+      // `crates/nexus-client/src/execution.rs`'s module docs) —
+      // disambiguated here by payload shape: a `task_id`-carrying payload
+      // confirms completion, a bare-`consultant_id` payload queries
+      // engagements.
+      if (capabilityId === 'execution.task_completions') {
+        if (typeof payload.task_id === 'string') {
+          taskCompletionRequests.push({ path: capabilityId, body: payload, receivedAt: now() })
+          respond({ accepted: true })
+          return
+        }
+        respond({ engagements: ENGAGEMENT_SNAPSHOT_FIXTURE })
+        return
+      }
+
+      // Products catalog query (ADR-016, PROMPT-39): always answers with
+      // the fixed `PRODUCT_CATALOG_FIXTURE`, matching
+      // `crates/nexus-client/src/products.rs`'s `ProductCatalogEnvelope`
+      // (`{"cards": [...]}`) convention.
+      if (capabilityId === 'products.catalog') {
+        productCatalogRequests.push({ path: capabilityId, body: null, receivedAt: now() })
+        respond({ cards: PRODUCT_CATALOG_FIXTURE })
+        return
+      }
+
+      // Landscape intelligence-digest query (ADR-016, PROMPT-40): always
+      // answers with the fixed `INTELLIGENCE_DIGEST_FIXTURE`, matching
+      // `crates/nexus-client/src/landscape.rs`'s
+      // `IntelligenceDigestEnvelope` (`{"items": [...]}`) convention.
+      if (capabilityId === 'landscape.intelligence') {
+        respond({ items: INTELLIGENCE_DIGEST_FIXTURE })
+        return
+      }
+
+      // Landscape field-observation submission command (ADR-016,
+      // PROMPT-40): always accepts and records the request, matching
+      // `crates/nexus-client/src/landscape.rs`'s `FieldObservationSubmission`
+      // shape — fire-and-confirm, same "no documented ack body" convention
+      // as Sales' `collaboration-requests`/`referrals` above.
+      if (capabilityId === 'landscape.observations') {
+        fieldObservations.push({ path: capabilityId, body: payload, receivedAt: now() })
+        respond({})
+        return
+      }
+
+      // Legal approved-clauses query (ADR-007, PROMPT-41): always answers
+      // with the fixed `APPROVED_LEGAL_SNIPPET_FIXTURE`, matching
+      // `crates/nexus-client/src/legal.rs`'s `ClausesEnvelope`
+      // (`{"clauses": [...]}`) convention, regardless of which of
+      // `proposal_id`/`topic` was sent.
+      if (capabilityId === 'legal.clauses') {
+        legalClauseRequests.push({
+          path: capabilityId,
+          body: { proposal_id: payload.proposal_id ?? null, topic: payload.topic ?? null },
+          receivedAt: now(),
+        })
+        respond({ clauses: APPROVED_LEGAL_SNIPPET_FIXTURE })
+        return
+      }
+
+      console.error(`[mock-nexus] no capability handler for ${capabilityId}`)
+      sendJson(response, 404, { error: `mock nexus has no route for capability ${capabilityId}` })
       return
     }
 
-    // Commit proposal list (PROMPT-34): `{"proposals": [...]}` envelope,
-    // matching `crates/nexus-client/src/commit.rs`'s `ProposalsEnvelope`.
-    if (method === 'GET' && url.pathname === '/commit/v1/proposals') {
-      sendJson(response, 200, { proposals: [...proposals.values()] })
-      return
-    }
-
-    if (method === 'POST' && url.pathname === '/commit/v1/proposal-actions') {
-      const body = await readJsonBody(request)
-      proposalActions.push({ path: url.pathname, body, receivedAt: new Date().toISOString() })
-      sendJson(response, 200, {})
-      return
-    }
-
-    // Edu learning-catalog query (ADR-016, PROMPT-35): always answers with
-    // the fixed `LEARNING_CATALOG_FIXTURE`, matching
-    // `crates/nexus-client/src/edu.rs`'s `LearningCatalogEnvelope`
-    // (`{"snapshots": [...]}`) convention. `consultant_id` is recorded so a
-    // spec can assert the BFF forwarded the authenticated consultant, the
-    // same shape `_test/proposals` proves for Commit.
-    if (method === 'GET' && url.pathname === '/edu/v1/catalog') {
-      catalogRequests.push({
-        path: url.pathname,
-        body: { consultant_id: url.searchParams.get('consultant_id') },
-        receivedAt: new Date().toISOString(),
-      })
-      sendJson(response, 200, { snapshots: LEARNING_CATALOG_FIXTURE })
-      return
-    }
-
-    // Capacity own-profile fetch (ADR-016, PROMPT-36): returns whatever is
-    // currently stored for `consultant_id`, seeding it from `PROFILE_FIXTURE`
-    // on first access — matches
-    // `crates/nexus-client/src/capacity.rs`'s bare-object (no envelope)
-    // response shape.
-    if (method === 'GET' && url.pathname === '/capacity/v1/profile') {
-      const consultantId = url.searchParams.get('consultant_id') ?? 'unknown-consultant'
-      const profile = capacityProfiles.get(consultantId) ?? PROFILE_FIXTURE
-      capacityProfiles.set(consultantId, profile)
-      sendJson(response, 200, profile)
-      return
-    }
-
-    // Capacity own-profile update (ADR-016, PROMPT-36): always accepts and
-    // overwrites the stored profile with `profile_fields`, matching
-    // `crates/nexus-client/src/capacity.rs`'s `UpdateOwnProfileCommand`/
-    // `ProfileUpdateResult` shapes.
-    if (method === 'POST' && url.pathname === '/capacity/v1/profile') {
-      const body = (await readJsonBody(request)) as { consultant_id: string; profile_fields: ConsultantProfileIntake }
-      capacityProfiles.set(body.consultant_id, body.profile_fields)
-      capacityProfileUpdates.push({ path: url.pathname, body, receivedAt: new Date().toISOString() })
-      sendJson(response, 200, { accepted: true })
-      return
-    }
-
-    // Customer assigned-context query (ADR-016, PROMPT-37): always answers
-    // with the fixed `CUSTOMER_CONTEXT_FIXTURE`, matching
-    // `crates/nexus-client/src/customer.rs`'s `CustomerContextEnvelope`
-    // (`{"contexts": [...]}`) convention. `consultant_id` is recorded so a
-    // spec can assert the BFF forwarded the authenticated consultant, the
-    // same shape `_test/edu-catalog-requests` proves for Edu.
-    if (method === 'GET' && url.pathname === '/customer/v1/context') {
-      customerContextRequests.push({
-        path: url.pathname,
-        body: { consultant_id: url.searchParams.get('consultant_id') },
-        receivedAt: new Date().toISOString(),
-      })
-      sendJson(response, 200, { contexts: CUSTOMER_CONTEXT_FIXTURE })
-      return
-    }
-
-    // Execution assigned-engagements query (ADR-016, PROMPT-38): always
-    // answers with the fixed `ENGAGEMENT_SNAPSHOT_FIXTURE`, matching
-    // `crates/nexus-client/src/execution.rs`'s `EngagementsEnvelope`
-    // (`{"engagements": [...]}`) convention.
-    if (method === 'GET' && url.pathname === '/execution/v1/engagements') {
-      sendJson(response, 200, { engagements: ENGAGEMENT_SNAPSHOT_FIXTURE })
-      return
-    }
-
-    // Execution task-completion-request command (ADR-016, PROMPT-38): always
-    // accepts and records the request, matching
-    // `crates/nexus-client/src/execution.rs`'s `ConfirmTaskCompletionCommand`
-    // shape — fire-and-confirm, same "no documented ack body" convention as
-    // Sales' `collaboration-requests`/`referrals` above.
-    if (method === 'POST' && url.pathname === '/execution/v1/task-completions') {
-      const body = await readJsonBody(request)
-      taskCompletionRequests.push({ path: url.pathname, body, receivedAt: new Date().toISOString() })
-      sendJson(response, 200, { accepted: true })
-      return
-    }
-
-    // Products catalog query (ADR-016, PROMPT-39): always answers with the
-    // fixed `PRODUCT_CATALOG_FIXTURE`, matching
-    // `crates/nexus-client/src/products.rs`'s `ProductCatalogEnvelope`
-    // (`{"cards": [...]}`) convention.
-    if (method === 'GET' && url.pathname === '/products/v1/catalog') {
-      productCatalogRequests.push({ path: url.pathname, body: null, receivedAt: new Date().toISOString() })
-      sendJson(response, 200, { cards: PRODUCT_CATALOG_FIXTURE })
-      return
-    }
-
-    // Landscape intelligence-digest query (ADR-016, PROMPT-40): always
-    // answers with the fixed `INTELLIGENCE_DIGEST_FIXTURE`, matching
-    // `crates/nexus-client/src/landscape.rs`'s `IntelligenceDigestEnvelope`
-    // (`{"items": [...]}`) convention.
-    if (method === 'GET' && url.pathname === '/landscape/v1/intelligence') {
-      sendJson(response, 200, { items: INTELLIGENCE_DIGEST_FIXTURE })
-      return
-    }
-
-    // Landscape field-observation submission command (ADR-016, PROMPT-40):
-    // always accepts and records the request, matching
-    // `crates/nexus-client/src/landscape.rs`'s `FieldObservationSubmission`
-    // shape — fire-and-confirm, same "no documented ack body" convention as
-    // Sales' `collaboration-requests`/`referrals` above.
-    if (method === 'POST' && url.pathname === '/landscape/v1/observations') {
-      const body = await readJsonBody(request)
-      fieldObservations.push({ path: url.pathname, body, receivedAt: new Date().toISOString() })
-      sendJson(response, 200, {})
-      return
-    }
-
-    // Legal approved-clauses query (ADR-007, PROMPT-41): always answers with
-    // the fixed `APPROVED_LEGAL_SNIPPET_FIXTURE`, matching
-    // `crates/nexus-client/src/legal.rs`'s `ClausesEnvelope`
-    // (`{"clauses": [...]}`) convention, regardless of which of
-    // `proposal_id`/`topic` was sent.
-    if (method === 'GET' && url.pathname === '/legal/v1/clauses') {
-      legalClauseRequests.push({
-        path: url.pathname,
-        body: { proposal_id: url.searchParams.get('proposal_id'), topic: url.searchParams.get('topic') },
-        receivedAt: new Date().toISOString(),
-      })
-      sendJson(response, 200, { clauses: APPROVED_LEGAL_SNIPPET_FIXTURE })
-      return
-    }
-
-    // Events poll (PROMPT-30/PROMPT-33): `bff-api`'s ingestion polling loop
+    // Events poll (PROMPT-30/PROMPT-33): not part of the ADR-029 capability
+    // envelope — see the module docs. `bff-api`'s ingestion polling loop
     // (`crates/bff-api/src/event_ingestion.rs`) expects a bare JSON array
     // of `CapabilityEventReceived`. Drains whatever `_test/enqueue-event`
     // has queued so far, then clears it — see the `queuedEvents` doc
