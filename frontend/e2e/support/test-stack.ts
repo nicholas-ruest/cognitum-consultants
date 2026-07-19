@@ -219,10 +219,19 @@ export async function startTestStack(nexusEndpointUrl: string): Promise<TestStac
   const bffProcess = startBffApi(nexusEndpointUrl)
   let bffOutput = ''
   bffProcess.stdout?.on('data', (chunk: Buffer) => {
-    bffOutput += chunk.toString()
+    const text = chunk.toString()
+    bffOutput += text
+    // Streamed live (not just captured for the healthz-failure error below):
+    // a request handler can fail with a real 500 well after healthz already
+    // passed (no DB connectivity issue at startup, a real per-request bug),
+    // and that failure is otherwise invisible in CI -- it never reaches the
+    // "bff-api failed to become healthy" path since the process is healthy.
+    process.stdout.write(`[bff-api] ${text}`)
   })
   bffProcess.stderr?.on('data', (chunk: Buffer) => {
-    bffOutput += chunk.toString()
+    const text = chunk.toString()
+    bffOutput += text
+    process.stderr.write(`[bff-api] ${text}`)
   })
 
   let bffExitedEarly: number | null | undefined
