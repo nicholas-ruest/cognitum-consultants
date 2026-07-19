@@ -17,14 +17,19 @@
 //! including this one, still ends up feeding its own local `EventBus` via
 //! that bridge's `LISTEN` loop instead of losing delivery entirely).
 //!
-//! # Provisional endpoint (ADR-007 framing: Nexus's real contract is unknown)
-//! `GET events/v1/poll[?since=<cursor>]`, expected to return a bare JSON
-//! array of [`CapabilityEventReceived`] — no wrapping envelope, matching the
-//! "a `Vec<CapabilityEventReceived>` per poll" shape this unit's own prompt
-//! describes. This is a guess, not a confirmed contract (same disclaimer as
-//! `nexus_client::sales`'s provisional `sales/v1/...` paths) — update
-//! [`EVENTS_POLL_PATH`]/[`fetch_events`] once Nexus's actual events-poll
-//! contract is known.
+//! # Events-poll endpoint (ADR-030: nexus's real consumer-poll contract)
+//! `GET api/v1/events/poll?consumer=<repo_id>[&since=<cursor>]`, returning a
+//! bare JSON array of [`CapabilityEventReceived`] — no wrapping envelope,
+//! matching the "a `Vec<CapabilityEventReceived>` per poll" shape this unit
+//! consumes. ADR-030 §3 built this as a real, bounded, per-consumer feed
+//! (org-scoped per ADR-020) to replace the earlier guessed `events/v1/poll`
+//! path, which never existed on nexus-server and 404'd — the same class of
+//! guessed-path gap ADR-029 closed for capability calls. `consumer` is this
+//! repo's declared `repo_id` ([`EVENTS_POLL_CONSUMER`]); nexus uses it to
+//! scope the feed to this consumer's own org's events. The `api/v1/` prefix
+//! lives in [`EVENTS_POLL_PATH`] itself (not the configured base URL, which
+//! is the bare host), matching `nexus_client`'s `api/v1/capabilities/...`
+//! join convention.
 //!
 //! # Two dedup layers — do not confuse them
 //! 1. **Cursor/watermark (this module, primary/efficiency mechanism)**:
@@ -58,8 +63,16 @@ use nexus_client::{NexusRequest, NexusTransport, NexusTransportError};
 use reqwest::Method;
 use reqwest::header::HeaderMap;
 
-/// Provisional Nexus events-poll endpoint path — see the module docs.
-const EVENTS_POLL_PATH: &str = "events/v1/poll";
+/// Nexus's real consumer events-poll route (ADR-030 §3). Carries the full
+/// `api/v1/` prefix because the configured base URL is the bare host (same
+/// convention as `nexus_client`'s `api/v1/capabilities/...` path).
+const EVENTS_POLL_PATH: &str = "api/v1/events/poll";
+
+/// This repo's declared `repo_id`, sent as the `consumer` query param so
+/// nexus scopes the events feed to this consumer's own org (ADR-030 §3,
+/// ADR-020). Matches the `cognitum-consultants` entry in nexus's
+/// `config/registries/repos.json`.
+const EVENTS_POLL_CONSUMER: &str = "cognitum-consultants";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PollError {
@@ -84,18 +97,18 @@ pub struct PollOutcome {
     pub cursor: Option<DateTime<Utc>>,
 }
 
-/// Builds the `since`-qualified poll path, percent-encoding the timestamp
-/// query parameter (matching `nexus_client::armor`'s
-/// `url::form_urlencoded::Serializer` convention).
+/// Builds the poll path with the always-present `consumer` query param and,
+/// once the cursor has advanced, the `since` param — percent-encoding both
+/// (matching `nexus_client::armor`'s `url::form_urlencoded::Serializer`
+/// convention). `consumer` is required by nexus on every poll (ADR-030 §3);
+/// `since` is omitted on the very first poll after a restart (no cursor yet).
 fn build_poll_path(since: Option<DateTime<Utc>>) -> String {
-    match since {
-        Some(since) => {
-            let mut query = url::form_urlencoded::Serializer::new(String::new());
-            query.append_pair("since", &since.to_rfc3339());
-            format!("{EVENTS_POLL_PATH}?{}", query.finish())
-        }
-        None => EVENTS_POLL_PATH.to_string(),
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    query.append_pair("consumer", EVENTS_POLL_CONSUMER);
+    if let Some(since) = since {
+        query.append_pair("since", &since.to_rfc3339());
     }
+    format!("{EVENTS_POLL_PATH}?{}", query.finish())
 }
 
 async fn fetch_events(
@@ -267,7 +280,7 @@ mod tests {
 
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/events/v1/poll"))
+            .and(path("/api/v1/events/poll"))
             .respond_with(ResponseTemplate::new(200).set_body_json(event_batch_body()))
             .mount(&mock_server)
             .await;
@@ -320,11 +333,15 @@ mod tests {
         // The second request actually carried the cursor forward as `since`
         // — proof the watermark mechanism (layer 1) is wired, not just the
         // idempotent-save safety net (layer 2) papering over it never being
-        // used.
+        // used. Both polls always carry the `consumer` param (ADR-030 §3);
+        // only the second (post-cursor) poll carries `since`.
         let requests = mock_server.received_requests().await.expect("request recording enabled by default");
         assert_eq!(requests.len(), 2);
-        assert!(requests[0].url.query().is_none(), "the first poll has no cursor yet");
+        let first_query = requests[0].url.query().expect("every poll carries the consumer param");
+        assert!(first_query.contains("consumer=cognitum-consultants"), "expected consumer= param, got {first_query:?}");
+        assert!(!first_query.contains("since="), "the first poll has no cursor yet, got {first_query:?}");
         let second_query = requests[1].url.query().expect("second poll should carry a since= cursor");
+        assert!(second_query.contains("consumer=cognitum-consultants"), "expected consumer= param, got {second_query:?}");
         assert!(second_query.contains("since="), "expected a since= query param, got {second_query:?}");
     }
 
@@ -340,7 +357,7 @@ mod tests {
 
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/events/v1/poll"))
+            .and(path("/api/v1/events/poll"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
             .mount(&mock_server)
             .await;
@@ -375,7 +392,7 @@ mod tests {
 
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/events/v1/poll"))
+            .and(path("/api/v1/events/poll"))
             .respond_with(ResponseTemplate::new(503))
             .mount(&mock_server)
             .await;
