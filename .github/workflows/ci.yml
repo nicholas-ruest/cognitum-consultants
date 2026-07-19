@@ -191,8 +191,10 @@ jobs:
           # again for the final one -- wait for it twice before touching
           # `psql` at all.
           for _ in $(seq 1 60); do
-            occurrences=$(docker logs deploy-postgres 2>&1 | grep -c "database system is ready to accept connections")
-            [ "$occurrences" -ge 2 ] && break
+            occurrences=$(docker logs deploy-postgres 2>&1 | grep -c "database system is ready to accept connections" || true)
+            if [ "$occurrences" -ge 2 ]; then
+              break
+            fi
             sleep 1
           done
           docker exec deploy-postgres pg_isready -U postgres
