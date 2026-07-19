@@ -18,11 +18,17 @@
 //!    first (`PermissionCache::assertions_for`, already `await`ed) and then
 //!    hand this aggregate a synchronous closure over that already-resolved,
 //!    in-memory set — e.g. `|module_id: &str|
-//!    assertions.iter().any(|a| a.capability == module_id)`. That keeps
-//!    `bff-core` itself fully synchronous and framework/infra-agnostic
-//!    (no `async_trait`, no knowledge of Armor/Nexus/HTTP), while the real
-//!    permission decision still always comes from `bff-api`'s
-//!    `PermissionCache`, never a fabricated/local one.
+//!    assertions.iter().any(|a| bff_api::permissions::capability_grants_module(&a.capability, module_id))`
+//!    (ADR-019: a `module_id` here is a capability *family*, e.g.
+//!    `"sales"`; Armor's real assertions are granular
+//!    `"{family}.{action}"` ids, e.g. `"sales.account_claims"` — an exact
+//!    `==` check between the two never matches, so `bff-api` must use its
+//!    shared family-prefix matcher, not a bare equality check, when
+//!    building this closure). That keeps `bff-core` itself fully
+//!    synchronous and framework/infra-agnostic (no `async_trait`, no
+//!    knowledge of Armor/Nexus/HTTP), while the real permission decision
+//!    still always comes from `bff-api`'s `PermissionCache`, never a
+//!    fabricated/local one.
 //! 2. Card positions are unique within one configuration — enforced by
 //!    [`DashboardConfiguration::add_card`] rejecting a duplicate position,
 //!    and re-checked by [`DashboardConfiguration::from_parts`] so a
@@ -48,20 +54,23 @@ use std::fmt;
 /// through the caller's permission check like any other card (invariant 1
 /// applies to defaults too — see the module docs).
 ///
-/// **Assumption** (`consultant-experience-context.md` §1.2 invariant 4 flags
-/// this as unspecified by research.md): these three module ids —
-/// `sales`, `commit`, `execution` — are the capabilities `domain-map.md`
-/// describes as the consultant's primary, ongoing, transactional
-/// workspaces (Sales: lead/customer ownership; Commit: proposals the
-/// consultant "create[s] and manage[s] centrally"; Execution: "the
-/// consultant's assigned delivery workspace"), as opposed to capabilities
-/// `domain-map.md` characterizes as read-heavy/catalog/reference-only
-/// (Edu, Products, Landscape, Legal, Customer) or deliberately
-/// narrow-access (Capacity). This is a deliberately small, easily-revisited
-/// default, not an attempt to invent business meaning beyond what
-/// `domain-map.md` already states about each capability's relationship
-/// shape.
-pub const DEFAULT_CARD_MODULE_IDS: [&str; 3] = ["sales", "commit", "execution"];
+/// **Revised by ADR-019** from an original 3-card default (`sales`,
+/// `commit`, `execution` — the capabilities `domain-map.md` describes as
+/// the consultant's primary, ongoing, transactional workspaces, as opposed
+/// to the read-heavy/catalog/reference capabilities this list originally
+/// excluded by design). That categorization of each capability's
+/// *relationship shape* isn't wrong, but explicit product input established
+/// that consultants need the full toolset — including the catalog/reference
+/// capabilities (Edu, Products, Landscape, Legal, Customer) — visible on
+/// first login, not opt-in via a manual `PUT /api/dashboard`. Now every
+/// `nexus-client` gateway family this repo integrates with, except `armor`
+/// itself (a permission *source*, not a displayable capability surface).
+/// Invariant 1's permission filter still applies per-card exactly as
+/// before — a consultant genuinely unpermitted for a given family still
+/// won't see that card; this only changes the *candidate* set offered by
+/// default.
+pub const DEFAULT_CARD_MODULE_IDS: [&str; 9] =
+    ["sales", "commit", "edu", "capacity", "customer", "execution", "products", "landscape", "legal"];
 
 /// A single dashboard card, placed at a fixed `position` and pointing at a
 /// `module_id` (a capability name, e.g. `"sales"`, `"commit"` — matching the
@@ -292,7 +301,7 @@ mod tests {
         assert_eq!(module_ids, DEFAULT_CARD_MODULE_IDS.to_vec());
 
         let positions: Vec<u32> = config.cards().iter().map(CardPlacement::position).collect();
-        assert_eq!(positions, vec![0, 1, 2]);
+        assert_eq!(positions, (0..DEFAULT_CARD_MODULE_IDS.len() as u32).collect::<Vec<_>>());
     }
 
     /// A partial permission set only yields the permitted defaults.

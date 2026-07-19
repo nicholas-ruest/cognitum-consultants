@@ -175,8 +175,12 @@ mod tests {
         let (pool, _container) = migrated_pool().await;
         let repo = PgDashboardConfigurationRepository::new(pool);
 
+        // Position 9 (not `DEFAULT_CARD_MODULE_IDS`' 0..9 range, ADR-019)
+        // and a synthetic module id, added on top of the (now 9-card,
+        // ADR-019) default set -- proves round-tripping an extra, non-default
+        // card, not just the defaults themselves.
         let mut config = DashboardConfiguration::new("consultant-1", &all_permitted).unwrap();
-        config.add_card(CardPlacement::new("legal", 3), &all_permitted).unwrap();
+        config.add_card(CardPlacement::new("custom-widget", 9), &all_permitted).unwrap();
 
         repo.save(&config).await.expect("save failed");
 
@@ -210,7 +214,8 @@ mod tests {
         let mut config = DashboardConfiguration::new("consultant-1", &all_permitted).unwrap();
         repo.save(&config).await.expect("first save failed");
 
-        config.add_card(CardPlacement::new("legal", 5), &all_permitted).unwrap();
+        // Position 9 -- outside DEFAULT_CARD_MODULE_IDS' 0..9 range (ADR-019).
+        config.add_card(CardPlacement::new("custom-widget", 9), &all_permitted).unwrap();
         repo.save(&config).await.expect("second save failed");
 
         let count: i64 = sqlx::query("SELECT COUNT(*) AS count FROM dashboard_configurations")

@@ -63,6 +63,7 @@ use axum::{Extension, Json, Router};
 use bff_core::{CardPlacement, DashboardConfiguration, DashboardConfigurationError};
 use serde::{Deserialize, Serialize};
 
+use crate::permissions::capability_grants_module;
 use crate::session::{self, AppState};
 use auth::Session;
 
@@ -109,7 +110,7 @@ fn to_response(config: &DashboardConfiguration) -> DashboardResponse {
 /// decisions.
 pub async fn get_dashboard(State(state): State<AppState>, Extension(session): Extension<Session>) -> Response {
     let assertions = state.permission_cache.assertions_for(&session.consultant_id).await;
-    let is_permitted = |module_id: &str| assertions.iter().any(|assertion| assertion.capability == module_id);
+    let is_permitted = |module_id: &str| assertions.iter().any(|assertion| capability_grants_module(&assertion.capability, module_id));
 
     let stored = match state.dashboard_repository.find_by_consultant_id(&session.consultant_id).await {
         Ok(existing) => existing,
@@ -155,7 +156,7 @@ pub async fn put_dashboard(
     Json(body): Json<PutDashboardRequest>,
 ) -> Response {
     let assertions = state.permission_cache.assertions_for(&session.consultant_id).await;
-    let is_permitted = |module_id: &str| assertions.iter().any(|assertion| assertion.capability == module_id);
+    let is_permitted = |module_id: &str| assertions.iter().any(|assertion| capability_grants_module(&assertion.capability, module_id));
 
     // Start from an empty aggregate: `DashboardConfiguration::new` would
     // otherwise inject its own default card set, which has no place in a
@@ -584,10 +585,29 @@ mod tests {
         let module_ids: Vec<&str> =
             body["cards"].as_array().unwrap().iter().map(|card| card["module_id"].as_str().unwrap()).collect();
 
-        // DEFAULT_CARD_MODULE_IDS is ["sales", "commit", "execution"]; only
-        // the permitted two survive.
+        // DEFAULT_CARD_MODULE_IDS now covers 9 families (ADR-019); only the
+        // two this mock grants ("sales", "commit") survive the filter.
         assert_eq!(module_ids, vec!["sales", "commit"]);
         assert_eq!(body["consultant_id"], auth::dev_stub::DEV_CONSULTANT_ID);
+    }
+
+    /// ADR-019's own bug, reproduced end-to-end through the real router: a
+    /// consultant holding only Armor's real, granular sub-capability
+    /// (`"sales.account_claims"`, never the bare family name `"sales"`)
+    /// must still see the `sales` card — the exact case that silently
+    /// produced an empty dashboard in production before this fix.
+    #[tokio::test]
+    async fn get_grants_a_card_for_a_granular_sub_capability_not_just_an_exact_family_match() {
+        let (router, cookie, _container) = test_app(vec!["sales.account_claims"]).await;
+
+        let response = router.oneshot(get_request(&cookie)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response_json(response).await;
+        let module_ids: Vec<&str> =
+            body["cards"].as_array().unwrap().iter().map(|card| card["module_id"].as_str().unwrap()).collect();
+
+        assert_eq!(module_ids, vec!["sales"]);
     }
 
     #[tokio::test]

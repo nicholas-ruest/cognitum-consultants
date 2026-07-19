@@ -88,6 +88,34 @@ use crate::session::{self, AppState};
 /// `expires_at` exists to derive a bound from). See the module docs.
 const EMPTY_ASSERTIONS_TTL: ChronoDuration = ChronoDuration::seconds(30);
 
+/// True when a `PermissionAssertion.capability` grants `module_id` (ADR-019).
+///
+/// Every route handler in this repo, and `crate::dashboard`'s own
+/// permission-filtered card model, checks against a bare capability
+/// **family** name (`"sales"`, `"commit"`, `"edu"`, ... — each route's own
+/// `*_CAPABILITY` constant; `bff_core::dashboard_configuration::DEFAULT_CARD_MODULE_IDS`
+/// for the dashboard). But Armor issues granular, dotted `{family}.{action}`
+/// assertions (`"sales.account_claims"`, `"commit.proposals"`,
+/// `"customer.context"`, ... — see each `nexus_client` gateway's own
+/// `CAPABILITY_*` constants, all populating ADR-029's envelope
+/// `capability_id`). An exact-string check between the two never matches —
+/// confirmed live in production (ADR-019's own investigation): a consultant
+/// holding real, valid `sales.account_claims`/`commit.proposals` assertions
+/// still failed every `is_permitted(consultant_id, "sales")`/
+/// `is_permitted(consultant_id, "commit")` check, because `"sales.account_claims"
+/// != "sales"`.
+///
+/// `capability` grants `module_id` when it equals `module_id` exactly (in
+/// case a caller — Armor, or a future test — ever issues a bare family-level
+/// grant) or starts with `"{module_id}."` (Armor's real, granular form). This
+/// is the single shared definition of that match — both
+/// [`PermissionCache::is_permitted`] and `crate::dashboard`'s own
+/// permission-filter closures call it, rather than each re-implementing
+/// (and re-diverging on) the same rule.
+pub fn capability_grants_module(capability: &str, module_id: &str) -> bool {
+    capability == module_id || capability.starts_with(&format!("{module_id}."))
+}
+
 struct CacheEntry {
     assertions: Vec<PermissionAssertion>,
     /// The minimum `expires_at` across `assertions` (or `Utc::now() +
@@ -129,7 +157,9 @@ impl PermissionCache {
     /// `session::resolve_session` already applies to session lookups.
     pub async fn is_permitted(&self, consultant_id: &str, capability: &str) -> bool {
         match self.get_or_refresh(consultant_id).await {
-            Ok(assertions) => assertions.iter().any(|assertion| assertion.capability == capability),
+            Ok(assertions) => {
+                assertions.iter().any(|assertion| capability_grants_module(&assertion.capability, capability))
+            }
             Err(err) => {
                 tracing::error!(
                     error = %err,
@@ -348,6 +378,44 @@ mod tests {
         let cache = PermissionCache::new(gateway.clone());
 
         assert!(!cache.is_permitted("consultant-1", "sales:write").await);
+    }
+
+    // --- ADR-019: capability-family prefix matching ---
+
+    #[test]
+    fn capability_grants_module_matches_exact_equality() {
+        assert!(capability_grants_module("sales", "sales"));
+    }
+
+    #[test]
+    fn capability_grants_module_matches_a_granular_sub_capability() {
+        assert!(capability_grants_module("sales.account_claims", "sales"));
+        assert!(capability_grants_module("commit.proposal_actions", "commit"));
+    }
+
+    #[test]
+    fn capability_grants_module_rejects_an_unrelated_family() {
+        assert!(!capability_grants_module("commit.proposals", "sales"));
+    }
+
+    #[test]
+    fn capability_grants_module_rejects_a_family_name_that_is_only_a_string_prefix_not_a_dotted_child() {
+        // "salesforce" textually starts with "sales" but is not
+        // "sales."-prefixed -- must not match (guards against a naive
+        // `starts_with(module_id)` without the separator).
+        assert!(!capability_grants_module("salesforce.leads", "sales"));
+    }
+
+    /// The exact bug ADR-019 fixes, reproduced directly: a real Armor grant
+    /// for the granular action must satisfy the route/dashboard's
+    /// family-level permission check.
+    #[tokio::test]
+    async fn is_permitted_true_for_a_granular_sub_capability_of_the_requested_family() {
+        let gateway =
+            Arc::new(MockArmorGateway::new(vec![assertion("sales.account_claims", Utc::now() + ChronoDuration::minutes(5))]));
+        let cache = PermissionCache::new(gateway.clone());
+
+        assert!(cache.is_permitted("consultant-1", "sales").await);
     }
 
     #[tokio::test]
