@@ -358,20 +358,26 @@ async fn main() {
         Arc::new(nexus_client::RetryingTransport::with_default_retries(Arc::new(events_timeout_transport)));
 
     // Background polling task (PROMPT-30, ADR-011's "Nexus → BFF ingestion
-    // via polling" decision): runs for the lifetime of the process, never
-    // awaited here. Graceful shutdown (ADR-014) drains in-flight HTTP
-    // requests via `with_graceful_shutdown` below; this task is simply
-    // dropped when the process exits, which is acceptable since a poll
-    // cycle has no partially-committed state of its own (`ingest_events`'s
-    // per-event saves are already individually atomic).
-    tokio::spawn(event_ingestion::run_polling_loop(
-        events_transport,
-        notification_repository.clone(),
-        action_queue_repository.clone(),
-        workflow_session_repository.clone(),
-        event_notify_publisher,
-        Duration::from_secs(cfg.event_poll_interval_seconds),
-    ));
+    // via polling" decision) — **temporarily not spawned**. Verified live
+    // against the real deployed nexus-server: `GET api/v1/events/poll`
+    // (ADR-030 §3's assumed route) 404s, and nexus's own public
+    // `/openapi.json` confirms no consumer-facing poll route exists at all
+    // (only `POST /api/v1/events`, which is event *ingestion into* nexus,
+    // the opposite direction). The two candidate discovery routes
+    // (`/api/v1/repos/{repo_id}/contract`, `/api/v1/graph/repos`) both
+    // reject this service's real Cloud-Run-to-Cloud-Run identity token with
+    // `{"error":"invalid signature"}` — the same token-minting mechanism
+    // that already works for `POST /api/v1/capabilities/...` — implying
+    // they're gated for a different caller/audience than a repo's own
+    // runtime identity, not something resolvable from this side.
+    //
+    // Spawning this against a route that doesn't exist only wastes calls
+    // and spams logs every `event_poll_interval_seconds`, so it's disabled
+    // until ADR-030's real event-delivery contract is confirmed with
+    // whoever owns nexus-server. Notifications/action-queue entries created
+    // via this repo's own capability calls are unaffected — this loop only
+    // covers events nexus would otherwise push in.
+    let _ = (events_transport, event_notify_publisher);
 
     // PROMPT-32, ADR-014: the other half of the bridge — a dedicated
     // Postgres `LISTEN` connection that republishes every NOTIFY (from any
