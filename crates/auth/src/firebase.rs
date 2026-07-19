@@ -44,7 +44,14 @@ const SESSION_TTL_DAYS: i64 = 14;
 
 #[derive(Debug, Deserialize)]
 struct FirebaseClaims {
+    // Never read directly by this code -- `jsonwebtoken::decode`'s own
+    // `Validation` (aud/iss set in `verify` below) checks these during
+    // decode itself. They still must exist as fields for serde to
+    // deserialize them in the first place, or that check silently becomes
+    // a no-op.
+    #[allow(dead_code)]
     aud: String,
+    #[allow(dead_code)]
     iss: String,
     email: Option<String>,
     #[serde(default)]
@@ -154,12 +161,11 @@ impl FirebaseSessionProvider {
     async fn cert_for_kid(&self, kid: &str) -> Result<String, FirebaseAuthError> {
         {
             let cache = self.certs_cache.read().await;
-            if let Some((certs, fetched_at)) = cache.as_ref() {
-                if fetched_at.elapsed() < CERTS_CACHE_TTL {
-                    if let Some(pem) = certs.get(kid) {
-                        return Ok(pem.clone());
-                    }
-                }
+            if let Some((certs, fetched_at)) = cache.as_ref()
+                && fetched_at.elapsed() < CERTS_CACHE_TTL
+                && let Some(pem) = certs.get(kid)
+            {
+                return Ok(pem.clone());
             }
         }
 

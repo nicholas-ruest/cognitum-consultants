@@ -75,6 +75,13 @@ async fn main() {
     // real, Firebase-backed provider (`auth::firebase`) is used instead —
     // it persists sessions in Postgres (`db_pool`) rather than in-memory,
     // since a Cloud Run instance can scale to zero between requests.
+    // The explicit tuple type is required (not just clarity) -- `session_provider`
+    // must unify to the `Arc<dyn SessionProvider>` trait object across both
+    // branches below, which needs a type hint since each branch's concrete
+    // provider type differs. `#[allow]` rather than factoring into named
+    // type aliases: this is the only call site, so an alias would just add
+    // a layer of indirection for a tuple destructured three lines down.
+    #[allow(clippy::type_complexity)]
     let (dev_session_provider, firebase_session_provider, session_provider): (
         Option<Arc<auth::dev_stub::DevStubSessionProvider>>,
         Option<Arc<auth::firebase::FirebaseSessionProvider>>,

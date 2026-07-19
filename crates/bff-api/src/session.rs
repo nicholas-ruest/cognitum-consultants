@@ -326,12 +326,11 @@ pub async fn login_firebase(
 /// cookie or an already-invalid session id: logging out of a session that
 /// isn't there isn't a failure from the caller's point of view.
 pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> (CookieJar, Json<Value>) {
-    if let Some(cookie) = jar.get(SESSION_COOKIE_NAME) {
-        if let Ok(session_id) = Uuid::parse_str(cookie.value()) {
-            if let Err(err) = state.session_provider.delete_session(session_id).await {
-                tracing::error!(error = %err, "session deletion failed during logout");
-            }
-        }
+    if let Some(cookie) = jar.get(SESSION_COOKIE_NAME)
+        && let Ok(session_id) = Uuid::parse_str(cookie.value())
+        && let Err(err) = state.session_provider.delete_session(session_id).await
+    {
+        tracing::error!(error = %err, "session deletion failed during logout");
     }
 
     let removal_cookie = Cookie::build(SESSION_COOKIE_NAME).path("/").build();
