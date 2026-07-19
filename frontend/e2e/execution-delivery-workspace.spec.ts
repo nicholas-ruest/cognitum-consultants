@@ -49,7 +49,7 @@ test('logs in, sees the delivery workspace, requests task completion through the
 }) => {
   // 1. Load the app unauthenticated, log in (PROMPT-18 flow).
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: 'Sign in', level: 3 })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.getByRole('heading', { name: 'Cognitum Consultants', level: 1 })).toBeVisible()
 

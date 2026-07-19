@@ -1,15 +1,19 @@
 import type { ReactElement } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { LoginPage } from './LoginPage'
 
-// PROMPT-18 (real-login revision): LoginPage renders a "Sign in with
-// Google" button that, on click, runs Firebase's `signInWithPopup` and
-// POSTs the resulting ID token to `POST /api/login/firebase`
+// PROMPT-18 (real-login revision): when this build has a Firebase API key
+// baked in (`VITE_FIREBASE_API_KEY`), LoginPage renders a "Sign in with
+// Google" button that runs Firebase's `signInWithPopup` and POSTs the
+// resulting ID token to `POST /api/login/firebase`
 // (`crates/auth/src/firebase.rs`). Neither Firebase nor the backend run in
 // this test — `firebase/auth`'s `signInWithPopup` and the global `fetch`
-// are both mocked.
+// are both mocked. Without that key (the default in this test
+// environment, matching a plain `npm run dev`/e2e build -- see
+// `LoginPage.tsx`'s own doc comment), it falls back to the dev-stub
+// `POST /api/login/dev` flow -- covered by its own describe block below.
 
 const signInWithPopupMock = vi.fn()
 
@@ -35,9 +39,14 @@ function mockSuccessfulGoogleSignIn() {
   })
 }
 
-describe('LoginPage', () => {
+describe('LoginPage (Firebase configured)', () => {
+  beforeEach(() => {
+    vi.stubEnv('VITE_FIREBASE_API_KEY', 'test-api-key')
+  })
+
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
     signInWithPopupMock.mockReset()
   })
 
@@ -106,5 +115,38 @@ describe('LoginPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(/sign-in failed/i)
     })
+  })
+})
+
+describe('LoginPage (Firebase not configured -- dev-stub fallback)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders a plain "Sign in" button with a dev-stub disclosure caption', () => {
+    renderWithClient(<LoginPage />)
+
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeInTheDocument()
+    expect(screen.getByText(/dev-stub session.*dev-consultant-001/i)).toBeInTheDocument()
+  })
+
+  it('POSTs to /api/login/dev on click, without touching Firebase', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ consultant_id: 'dev-consultant-001' }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithClient(<LoginPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/login/dev',
+        expect.objectContaining({ method: 'POST', credentials: 'include' }),
+      )
+    })
+    expect(signInWithPopupMock).not.toHaveBeenCalled()
   })
 })

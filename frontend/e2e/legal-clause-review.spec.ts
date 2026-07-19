@@ -32,7 +32,7 @@ function mockNexusBaseUrl(): string {
 test('shows approved legal clauses for a Commit proposal under review', async ({ page, request }) => {
   // 1. Load the app unauthenticated, log in.
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: 'Sign in', level: 3 })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
   await page.getByRole('button', { name: 'Sign in' }).click()
 
   // 2. The Commit card renders (one of the three default dashboard cards).

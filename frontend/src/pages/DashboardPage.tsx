@@ -105,7 +105,14 @@ export function DashboardPage({ session }: DashboardPageProps) {
       </p>
 
       <div className="mx-auto max-w-[1400px] p-4">
-        <section className="mb-8">
+        {/* Plain `<div>`s, not `<section>` -- feature modules (e.g. Edu's
+            `LearningDashboard`) render their own `<section>`s for internal
+            sub-partitions, and `<section>` wrapping *this* much of the page
+            would make any `has: heading(...)` scoped query that matches one
+            of those inner headings ambiguous between the module's own
+            section and this outer wrapper (both contain the heading as a
+            descendant), pulling in unrelated sibling content. */}
+        <div className="mb-8">
           <h2 className="mb-3 text-[0.6875rem] font-semibold uppercase tracking-widest text-muted-foreground">
             Overview
           </h2>
@@ -117,9 +124,9 @@ export function DashboardPage({ session }: DashboardPageProps) {
               <ActionQueue />
             </Card>
           </CardGrid>
-        </section>
+        </div>
 
-        <section>
+        <div>
           <h2 className="mb-3 text-[0.6875rem] font-semibold uppercase tracking-widest text-muted-foreground">
             Your Modules
           </h2>
@@ -166,7 +173,7 @@ export function DashboardPage({ session }: DashboardPageProps) {
               </div>
             )
           ) : null}
-        </section>
+        </div>
       </div>
     </Layout>
   )

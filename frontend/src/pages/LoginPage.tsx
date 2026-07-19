@@ -15,9 +15,16 @@ import { firebaseAuth, googleAuthProvider } from '../lib/firebase'
  * `approved_consultants` allowlist before issuing a session — signing in
  * with Google here is proof of identity, not proof of authorization.
  *
- * The prior dev-stub route (`POST /api/login/dev`) still exists
- * server-side for local dev (`Config::is_dev()`), but this page always
- * uses the real flow now.
+ * **Dev-stub fallback, not a parallel feature**: `firebaseConfigured` is
+ * `false` whenever this build has no `VITE_FIREBASE_API_KEY` baked in
+ * (Vite bakes `VITE_*` vars in at build time, per `../lib/firebase.ts`'s
+ * doc comment) — true for the production Docker image (`Dockerfile`
+ * passes it as a build arg), false for a plain `npm run dev`/e2e build,
+ * which is exactly when `bff-api`'s own `Config::is_dev()` is also true
+ * and only the dev-stub `SessionProvider` exists server-side
+ * (`crates/bff-api/src/main.rs`). Without this fallback, `npm run dev`
+ * and the e2e suite (`frontend/e2e/*.spec.ts`) would try a real Google
+ * OAuth popup against a backend that has no Firebase provider at all.
  */
 
 interface LoginResponse {
@@ -27,7 +34,10 @@ interface LoginResponse {
 class NotApprovedError extends Error {}
 
 async function loginWithGoogle(): Promise<LoginResponse> {
-  const result = await signInWithPopup(firebaseAuth, googleAuthProvider)
+  // Only called when `firebaseConfigured` is true (see `mutationFn` below),
+  // which is exactly when `../lib/firebase` initialized `firebaseAuth` for
+  // real rather than leaving it `null`.
+  const result = await signInWithPopup(firebaseAuth!, googleAuthProvider)
   const idToken = await result.user.getIdToken()
 
   const response = await fetch('/api/login/firebase', {
@@ -48,17 +58,27 @@ async function loginWithGoogle(): Promise<LoginResponse> {
   return (await response.json()) as LoginResponse
 }
 
+async function loginDev(): Promise<LoginResponse> {
+  const response = await fetch('/api/login/dev', { method: 'POST', credentials: 'include' })
+
+  if (!response.ok) {
+    throw new Error(`POST /api/login/dev failed: ${response.status}`)
+  }
+
+  return (await response.json()) as LoginResponse
+}
+
 export function LoginPage() {
   const queryClient = useQueryClient()
+  const firebaseConfigured = Boolean(import.meta.env.VITE_FIREBASE_API_KEY)
 
   const mutation = useMutation({
-    mutationFn: loginWithGoogle,
+    mutationFn: firebaseConfigured ? loginWithGoogle : loginDev,
     onSuccess: () => {
       // Same bare `['session']` key `useSessionQuery` reads — invalidating
       // it refetches `GET /api/session`, which now resolves against the
-      // cookie `POST /api/login/firebase` just set, flipping
-      // `useSession()` to `'authenticated'` and swapping `LoginPage` for
-      // the app shell.
+      // cookie the login call just set, flipping `useSession()` to
+      // `'authenticated'` and swapping `LoginPage` for the app shell.
       void queryClient.invalidateQueries({ queryKey: ['session'] })
     },
   })
@@ -104,11 +124,13 @@ export function LoginPage() {
               variant="secondary"
               className="h-14 w-full"
             >
-              {mutation.isPending ? 'Signing in…' : 'Sign in with Google'}
+              {mutation.isPending ? 'Signing in…' : firebaseConfigured ? 'Sign in with Google' : 'Sign in'}
             </Button>
 
             <p className="-mt-2 text-center text-xs text-muted-foreground">
-              Access is limited to approved consultant accounts
+              {firebaseConfigured
+                ? 'Access is limited to approved consultant accounts'
+                : 'Dev-stub session — signs in as dev-consultant-001'}
             </p>
           </div>
         </Card>

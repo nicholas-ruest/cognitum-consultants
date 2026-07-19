@@ -33,7 +33,7 @@ test('an event ingested via Nexus polling is pushed over SSE and appears in the 
 }) => {
   // 1. Log in (PROMPT-18 flow, same as sales-lead-conflict.spec.ts).
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: 'Sign in', level: 3 })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.getByRole('heading', { name: 'Cognitum Consultants', level: 1 })).toBeVisible()
 
