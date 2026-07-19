@@ -63,10 +63,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use reqwest::Method;
-use reqwest::header::HeaderMap;
 
-use crate::transport::{NexusRequest, NexusTransport, NexusTransportError};
+use crate::transport::{CapabilityCall, CapabilityCaller, NexusTransport, NexusTransportError};
+
+/// ADR-029 capability id + target repo for this gateway's single call.
+const CAPABILITY_CONTEXT: &str = "customer.context";
+const TARGET_REPO: &str = "cognitum-customer";
 
 /// Customer's Customer Context Card projection (`anti-corruption-layers.md`
 /// §5): this repo never models Customer's internal account/contact/
@@ -100,8 +102,6 @@ struct CustomerContextEnvelope {
 pub enum CustomerGatewayError {
     #[error(transparent)]
     Transport(#[from] NexusTransportError),
-    #[error("Customer returned a non-success status {status}")]
-    UnexpectedStatus { status: reqwest::StatusCode },
     #[error("Customer returned a response body that did not match the expected shape: {0}")]
     UnexpectedResponseShape(#[source] serde_json::Error),
 }
@@ -134,15 +134,17 @@ pub trait CustomerGateway: Send + Sync {
 /// [`CustomerGateway`] implementation backed by a [`NexusTransport`]. See
 /// the module docs for the required transport decoration.
 pub struct NexusCustomerGateway {
-    transport: Arc<dyn NexusTransport>,
+    caller: CapabilityCaller,
 }
 
 impl NexusCustomerGateway {
     /// `transport` is expected to already be decorated per the ADR-016 read
     /// convention (see module docs) — this constructor does not assemble
-    /// timeout/retry/circuit-breaker layers itself.
+    /// timeout/retry/circuit-breaker layers itself. It is wrapped in a
+    /// [`CapabilityCaller`] so this gateway issues the ADR-029 capability
+    /// envelope.
     pub fn new(transport: Arc<dyn NexusTransport>) -> Self {
-        Self { transport }
+        Self { caller: CapabilityCaller::new(transport) }
     }
 }
 
@@ -153,24 +155,22 @@ impl CustomerGateway for NexusCustomerGateway {
         consultant_id: &str,
         customer_id: Option<&str>,
     ) -> Result<Vec<CustomerContextCard>, CustomerGatewayError> {
-        let path = {
-            let mut query = url::form_urlencoded::Serializer::new(String::new());
-            query.append_pair("consultant_id", consultant_id);
-            if let Some(customer_id) = customer_id {
-                query.append_pair("customer_id", customer_id);
-            }
-            format!("customer/v1/context?{}", query.finish())
-        };
-
-        let request = NexusRequest { method: Method::GET, path, headers: HeaderMap::new(), body: None };
-        let response = self.transport.send(request).await?;
-
-        if !response.status.is_success() {
-            return Err(CustomerGatewayError::UnexpectedStatus { status: response.status });
+        let mut payload = serde_json::json!({ "consultant_id": consultant_id });
+        if let Some(customer_id) = customer_id {
+            payload["customer_id"] = serde_json::Value::String(customer_id.to_owned());
         }
 
+        let response_payload = self
+            .caller
+            .call(CapabilityCall {
+                capability_id: CAPABILITY_CONTEXT.to_owned(),
+                target_repo: TARGET_REPO.to_owned(),
+                payload,
+            })
+            .await?;
+
         let envelope: CustomerContextEnvelope =
-            serde_json::from_value(response.body).map_err(CustomerGatewayError::UnexpectedResponseShape)?;
+            serde_json::from_value(response_payload).map_err(CustomerGatewayError::UnexpectedResponseShape)?;
         Ok(envelope.contexts)
     }
 }

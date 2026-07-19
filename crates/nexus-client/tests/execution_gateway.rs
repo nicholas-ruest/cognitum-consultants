@@ -1,16 +1,17 @@
 //! Wiremock-backed tests for the Execution ACL gateway (`ExecutionGateway`,
-//! `NexusExecutionGateway`) — PROMPT-38.
+//! `NexusExecutionGateway`) — PROMPT-38, ADR-029.
 //!
-//! Mirrors `commit_gateway.rs`'s structure: a request-body-shape assertion
-//! per outbound call, several `EngagementSnapshot` fixture scenarios (an
-//! on-track engagement and an at-risk one — proving the gateway against more
-//! than one shape of `delivery_status`), and a malformed-response
-//! error-not-panic case.
+//! Post-ADR-029 both methods are `POST capabilities/execution.task_completions`
+//! carrying a `CapabilityRequest` envelope (the ADR-029 table names only this
+//! one execution capability — see `execution.rs`'s module docs); the nexus
+//! fixture distinguishes the engagements read from the completion write by
+//! payload (a bare `consultant_id` vs. a `task_id`-carrying body). The
+//! gateway unwraps `CapabilityResponse.payload`.
 
 use std::sync::Arc;
 
 use nexus_client::{EngagementTaskSummary, ExecutionGateway, ExecutionGatewayError, NexusExecutionGateway};
-use wiremock::matchers::{body_json, method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn gateway_for(mock_server: &MockServer) -> NexusExecutionGateway {
@@ -19,13 +20,22 @@ fn gateway_for(mock_server: &MockServer) -> NexusExecutionGateway {
     NexusExecutionGateway::new(transport)
 }
 
+fn ok(payload: serde_json::Value) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "request_id": "req-test", "success": true, "payload": payload }))
+}
+
 #[tokio::test]
-async fn request_assigned_engagements_sends_consultant_id_as_a_query_param_and_parses_the_envelope() {
+async fn request_assigned_engagements_sends_consultant_id_in_the_payload_and_parses_the_envelope() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/execution/v1/engagements"))
-        .and(query_param("consultant_id", "consultant-1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    Mock::given(method("POST"))
+        .and(path("/capabilities/execution.task_completions"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "execution.task_completions",
+            "target_repo": "cognitum-execution",
+            "payload": { "consultant_id": "consultant-1" }
+        })))
+        .respond_with(ok(serde_json::json!({
             "engagements": [
                 {
                     "engagement_id": "engagement-1",
@@ -75,9 +85,9 @@ async fn request_assigned_engagements_sends_consultant_id_as_a_query_param_and_p
 #[tokio::test]
 async fn request_assigned_engagements_handles_an_empty_result() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/execution/v1/engagements"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "engagements": [] })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/execution.task_completions"))
+        .respond_with(ok(serde_json::json!({ "engagements": [] })))
         .mount(&mock_server)
         .await;
 
@@ -88,15 +98,15 @@ async fn request_assigned_engagements_handles_an_empty_result() {
 }
 
 #[tokio::test]
-async fn confirm_task_completion_sends_correct_command_body_and_handles_success() {
+async fn confirm_task_completion_sends_correct_envelope_payload_and_handles_success() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/execution/v1/task-completions"))
-        .and(body_json(serde_json::json!({
-            "task_id": "task-1",
-            "consultant_id": "consultant-1"
+        .and(path("/capabilities/execution.task_completions"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "execution.task_completions",
+            "payload": { "task_id": "task-1", "consultant_id": "consultant-1" }
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"accepted": true})))
+        .respond_with(ok(serde_json::json!({"accepted": true})))
         .mount(&mock_server)
         .await;
 
@@ -109,12 +119,14 @@ async fn confirm_task_completion_sends_correct_command_body_and_handles_success(
 }
 
 #[tokio::test]
-async fn returns_gateway_error_not_panic_on_malformed_engagements_response() {
+async fn returns_gateway_error_not_panic_on_malformed_engagements_payload() {
     let mock_server = MockServer::start().await;
-    // A bare array instead of the expected `{"engagements": [...]}` envelope.
-    Mock::given(method("GET"))
-        .and(path("/execution/v1/engagements"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+    // Well-formed envelope, but its `payload` is a bare array instead of the
+    // expected `{"engagements": [...]}` object.
+    Mock::given(method("POST"))
+        .and(path("/capabilities/execution.task_completions"))
+        .and(body_partial_json(serde_json::json!({ "payload": { "consultant_id": "consultant-1" } })))
+        .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
         .await;
 
@@ -128,10 +140,10 @@ async fn returns_gateway_error_not_panic_on_malformed_engagements_response() {
 }
 
 #[tokio::test]
-async fn returns_unexpected_status_error_on_non_success_response() {
+async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/execution/v1/task-completions"))
+        .and(path("/capabilities/execution.task_completions"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;
@@ -140,7 +152,7 @@ async fn returns_unexpected_status_error_on_non_success_response() {
     let result = gateway.confirm_task_completion("task-1", "consultant-1").await;
 
     match result {
-        Err(ExecutionGatewayError::UnexpectedStatus { .. }) => {}
-        other => panic!("expected UnexpectedStatus error, got {other:?}"),
+        Err(ExecutionGatewayError::Transport(_)) => {}
+        other => panic!("expected Transport error, got {other:?}"),
     }
 }

@@ -45,10 +45,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use reqwest::Method;
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 
-use crate::transport::{NexusRequest, NexusTransport, NexusTransportError};
+use crate::transport::{CapabilityCall, CapabilityCaller, NexusTransport, NexusTransportError};
+
+/// ADR-029 capability id + target repo for this gateway's single call.
+const CAPABILITY_ASSERTIONS: &str = "armor.assertions";
+const TARGET_REPO: &str = "cognitum-armor";
 
 /// A grant Armor currently asserts for a consultant. Never the underlying
 /// authorization policy/rules themselves — those stay inside Armor
@@ -80,10 +82,6 @@ struct AssertionsEnvelope {
 pub enum ArmorGatewayError {
     #[error(transparent)]
     Transport(#[from] NexusTransportError),
-    #[error("credential could not be encoded as an Authorization header value: {0}")]
-    InvalidCredential(String),
-    #[error("Armor returned a non-success status {status}")]
-    UnexpectedStatus { status: reqwest::StatusCode },
     #[error("Armor returned a response body that did not match the expected assertions shape: {0}")]
     UnexpectedResponseShape(#[source] serde_json::Error),
 }
@@ -104,18 +102,20 @@ pub trait ArmorGateway: Send + Sync {
     ) -> Result<Vec<PermissionAssertion>, ArmorGatewayError>;
 }
 
-/// [`ArmorGateway`] implementation backed by a [`NexusTransport`]. See the
+/// [`ArmorGateway`] implementation backed by a [`CapabilityCaller`]. See the
 /// module docs for the transport-stack-assembly convention.
 pub struct NexusArmorGateway {
-    transport: Arc<dyn NexusTransport>,
+    caller: CapabilityCaller,
 }
 
 impl NexusArmorGateway {
     /// `transport` is expected to already be decorated per the ADR-016
     /// read-call convention (see module docs) — this constructor does not
-    /// assemble timeout/retry/circuit-breaker layers itself.
+    /// assemble timeout/retry/circuit-breaker layers itself. It is wrapped
+    /// in a [`CapabilityCaller`] so this gateway issues the ADR-029
+    /// capability envelope (`POST capabilities/armor.assertions`).
     pub fn new(transport: Arc<dyn NexusTransport>) -> Self {
-        Self { transport }
+        Self { caller: CapabilityCaller::new(transport) }
     }
 }
 
@@ -124,28 +124,25 @@ impl ArmorGateway for NexusArmorGateway {
     async fn fetch_assertions(
         &self,
         consultant_id: &str,
-        credential: &str,
+        // ADR-029: identity now travels in the `CapabilityRequest.actor`
+        // envelope (a placeholder today — see `CallerIdentity`), so the old
+        // `Bearer` credential header is gone. The parameter is retained on
+        // the trait (its callers still pass the session's placeholder token)
+        // but is no longer attached to the wire call.
+        _credential: &str,
     ) -> Result<Vec<PermissionAssertion>, ArmorGatewayError> {
-        let path = {
-            let mut query = url::form_urlencoded::Serializer::new(String::new());
-            query.append_pair("consultant_id", consultant_id);
-            format!("armor/v1/assertions?{}", query.finish())
-        };
-
-        let mut headers = HeaderMap::new();
-        let auth_value = HeaderValue::from_str(&format!("Bearer {credential}"))
-            .map_err(|e| ArmorGatewayError::InvalidCredential(e.to_string()))?;
-        headers.insert(AUTHORIZATION, auth_value);
-
-        let request = NexusRequest { method: Method::GET, path, headers, body: None };
-        let response = self.transport.send(request).await?;
-
-        if !response.status.is_success() {
-            return Err(ArmorGatewayError::UnexpectedStatus { status: response.status });
-        }
+        let payload = serde_json::json!({ "consultant_id": consultant_id });
+        let response_payload = self
+            .caller
+            .call(CapabilityCall {
+                capability_id: CAPABILITY_ASSERTIONS.to_owned(),
+                target_repo: TARGET_REPO.to_owned(),
+                payload,
+            })
+            .await?;
 
         let envelope: AssertionsEnvelope =
-            serde_json::from_value(response.body).map_err(ArmorGatewayError::UnexpectedResponseShape)?;
+            serde_json::from_value(response_payload).map_err(ArmorGatewayError::UnexpectedResponseShape)?;
         Ok(envelope.assertions)
     }
 }

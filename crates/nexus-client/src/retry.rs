@@ -93,5 +93,13 @@ fn is_retriable(result: &Result<NexusResponse, NexusTransportError>) -> bool {
         Err(NexusTransportError::CircuitOpen) => false,
         Err(NexusTransportError::InvalidUrl { .. }) => false,
         Err(NexusTransportError::ParseResponseJson(_)) => false,
+        // Capability-envelope errors are raised by `CapabilityCaller`, which
+        // sits *above* this decorator, so they never actually reach
+        // `is_retriable` at runtime — but the match must stay exhaustive.
+        // Neither is retriable: `UnexpectedStatus` here is a non-2xx the
+        // decorator already saw as a raw response, and `CapabilityFailure`
+        // is a business-level rejection a blind retry cannot fix.
+        Err(NexusTransportError::UnexpectedStatus { .. }) => false,
+        Err(NexusTransportError::CapabilityFailure { .. }) => false,
     }
 }

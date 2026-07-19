@@ -63,10 +63,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use reqwest::Method;
-use reqwest::header::HeaderMap;
 
-use crate::transport::{NexusRequest, NexusTransport, NexusTransportError};
+use crate::transport::{CapabilityCall, CapabilityCaller, NexusTransport, NexusTransportError};
+
+/// ADR-029 capability id + target repo for this gateway's single call.
+const CAPABILITY_CLAUSES: &str = "legal.clauses";
+const TARGET_REPO: &str = "cognitum-legal";
 
 /// Legal's Approved Legal Snippet projection (`anti-corruption-layers.md`
 /// §9): this repo never models Legal's own clause library, approval
@@ -107,8 +109,6 @@ pub enum ClauseContext<'a> {
 pub enum LegalGatewayError {
     #[error(transparent)]
     Transport(#[from] NexusTransportError),
-    #[error("Legal returned a non-success status {status}")]
-    UnexpectedStatus { status: reqwest::StatusCode },
     #[error("Legal returned a response body that did not match the expected shape: {0}")]
     UnexpectedResponseShape(#[source] serde_json::Error),
 }
@@ -135,16 +135,17 @@ pub trait LegalGateway: Send + Sync {
 /// [`LegalGateway`] implementation backed by a [`NexusTransport`]. See the
 /// module docs for the required transport decoration.
 pub struct NexusLegalGateway {
-    transport: Arc<dyn NexusTransport>,
+    caller: CapabilityCaller,
 }
 
 impl NexusLegalGateway {
     /// `transport` is expected to already be decorated per the ADR-016 read
     /// timeout + optional retry convention (see module docs) — this
     /// constructor does not assemble timeout/retry/circuit-breaker layers
-    /// itself.
+    /// itself. It is wrapped in a [`CapabilityCaller`] so this gateway
+    /// issues the ADR-029 capability envelope.
     pub fn new(transport: Arc<dyn NexusTransport>) -> Self {
-        Self { transport }
+        Self { caller: CapabilityCaller::new(transport) }
     }
 }
 
@@ -154,28 +155,24 @@ impl LegalGateway for NexusLegalGateway {
         &self,
         context: ClauseContext<'_>,
     ) -> Result<Vec<ApprovedLegalSnippet>, LegalGatewayError> {
-        let path = {
-            let mut query = url::form_urlencoded::Serializer::new(String::new());
-            match context {
-                ClauseContext::ProposalId(proposal_id) => {
-                    query.append_pair("proposal_id", proposal_id);
-                }
-                ClauseContext::Topic(topic) => {
-                    query.append_pair("topic", topic);
-                }
-            }
-            format!("legal/v1/clauses?{}", query.finish())
+        // `context` is a proposal id *or* a topic, never both (see the module
+        // docs); the payload carries exactly the one field that is set.
+        let payload = match context {
+            ClauseContext::ProposalId(proposal_id) => serde_json::json!({ "proposal_id": proposal_id }),
+            ClauseContext::Topic(topic) => serde_json::json!({ "topic": topic }),
         };
 
-        let request = NexusRequest { method: Method::GET, path, headers: HeaderMap::new(), body: None };
-        let response = self.transport.send(request).await?;
-
-        if !response.status.is_success() {
-            return Err(LegalGatewayError::UnexpectedStatus { status: response.status });
-        }
+        let response_payload = self
+            .caller
+            .call(CapabilityCall {
+                capability_id: CAPABILITY_CLAUSES.to_owned(),
+                target_repo: TARGET_REPO.to_owned(),
+                payload,
+            })
+            .await?;
 
         let envelope: ClausesEnvelope =
-            serde_json::from_value(response.body).map_err(LegalGatewayError::UnexpectedResponseShape)?;
+            serde_json::from_value(response_payload).map_err(LegalGatewayError::UnexpectedResponseShape)?;
         Ok(envelope.clauses)
     }
 }

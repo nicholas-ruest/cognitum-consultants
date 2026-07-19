@@ -1,16 +1,17 @@
 //! Wiremock-backed tests for the Legal ACL gateway (`LegalGateway`,
-//! `NexusLegalGateway`) — PROMPT-41.
+//! `NexusLegalGateway`) — PROMPT-41, ADR-029.
 //!
-//! Mirrors `products_gateway.rs`'s structure: a multi-item fixture scenario
-//! for the read (proving the gateway against more than one
-//! `ApprovedLegalSnippet`), a request-shape assertion proving `proposal_id`
-//! and `topic` are mutually exclusive query params, and a malformed-response
-//! error-not-panic case.
+//! Post-ADR-029 every call is the one real Nexus route,
+//! `POST capabilities/legal.clauses`, carrying a `CapabilityRequest`
+//! envelope; the gateway unwraps `CapabilityResponse.payload`. These tests
+//! assert the envelope's `capability_id`/`target_repo`/`payload` and the
+//! `proposal_id`-vs-`topic` either/or, then the parse of the returned
+//! `{"clauses": [...]}` payload.
 
 use std::sync::Arc;
 
 use nexus_client::{ClauseContext, LegalGateway, LegalGatewayError, NexusLegalGateway};
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn gateway_for(mock_server: &MockServer) -> NexusLegalGateway {
@@ -19,13 +20,24 @@ fn gateway_for(mock_server: &MockServer) -> NexusLegalGateway {
     NexusLegalGateway::new(transport)
 }
 
+/// A successful `CapabilityResponse` wrapping `payload`.
+fn ok(payload: serde_json::Value) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "request_id": "req-test", "success": true, "payload": payload }))
+}
+
 #[tokio::test]
 async fn request_approved_clauses_by_proposal_id_parses_a_multi_item_fixture() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/legal/v1/clauses"))
-        .and(query_param("proposal_id", "proposal-1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    Mock::given(method("POST"))
+        .and(path("/capabilities/legal.clauses"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "legal.clauses",
+            "target_repo": "cognitum-legal",
+            "caller": "cognitum-consultants",
+            "payload": { "proposal_id": "proposal-1" }
+        })))
+        .respond_with(ok(serde_json::json!({
             "clauses": [
                 {
                     "clause_id": "clause-1",
@@ -58,12 +70,12 @@ async fn request_approved_clauses_by_proposal_id_parses_a_multi_item_fixture() {
 }
 
 #[tokio::test]
-async fn request_approved_clauses_by_topic_sends_the_topic_query_param() {
+async fn request_approved_clauses_by_topic_sends_the_topic_in_the_payload() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/legal/v1/clauses"))
-        .and(query_param("topic", "data-residency"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "clauses": [] })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/legal.clauses"))
+        .and(body_partial_json(serde_json::json!({ "payload": { "topic": "data-residency" } })))
+        .respond_with(ok(serde_json::json!({ "clauses": [] })))
         .mount(&mock_server)
         .await;
 
@@ -76,9 +88,9 @@ async fn request_approved_clauses_by_topic_sends_the_topic_query_param() {
 #[tokio::test]
 async fn request_approved_clauses_handles_an_empty_result() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/legal/v1/clauses"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "clauses": [] })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/legal.clauses"))
+        .respond_with(ok(serde_json::json!({ "clauses": [] })))
         .mount(&mock_server)
         .await;
 
@@ -89,12 +101,13 @@ async fn request_approved_clauses_handles_an_empty_result() {
 }
 
 #[tokio::test]
-async fn returns_gateway_error_not_panic_on_malformed_clauses_response() {
+async fn returns_gateway_error_not_panic_on_malformed_clauses_payload() {
     let mock_server = MockServer::start().await;
-    // A bare array instead of the expected `{"clauses": [...]}` envelope.
-    Mock::given(method("GET"))
-        .and(path("/legal/v1/clauses"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+    // The envelope is well-formed, but its `payload` is a bare array instead
+    // of the expected `{"clauses": [...]}` object.
+    Mock::given(method("POST"))
+        .and(path("/capabilities/legal.clauses"))
+        .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
         .await;
 
@@ -108,10 +121,10 @@ async fn returns_gateway_error_not_panic_on_malformed_clauses_response() {
 }
 
 #[tokio::test]
-async fn returns_unexpected_status_error_on_non_success_response() {
+async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/legal/v1/clauses"))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/legal.clauses"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;
@@ -120,7 +133,30 @@ async fn returns_unexpected_status_error_on_non_success_response() {
     let result = gateway.request_approved_clauses(ClauseContext::ProposalId("proposal-1")).await;
 
     match result {
-        Err(LegalGatewayError::UnexpectedStatus { .. }) => {}
-        other => panic!("expected UnexpectedStatus error, got {other:?}"),
+        Err(LegalGatewayError::Transport(_)) => {}
+        other => panic!("expected Transport error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn returns_transport_error_when_capability_reports_failure() {
+    let mock_server = MockServer::start().await;
+    // HTTP 200 but the capability envelope reports a business-level failure.
+    Mock::given(method("POST"))
+        .and(path("/capabilities/legal.clauses"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "request_id": "req-test",
+            "success": false,
+            "error": "capability not declared"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let gateway = gateway_for(&mock_server);
+    let result = gateway.request_approved_clauses(ClauseContext::ProposalId("proposal-1")).await;
+
+    match result {
+        Err(LegalGatewayError::Transport(_)) => {}
+        other => panic!("expected Transport error, got {other:?}"),
     }
 }

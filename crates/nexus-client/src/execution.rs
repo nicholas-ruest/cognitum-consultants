@@ -74,10 +74,19 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use reqwest::Method;
-use reqwest::header::HeaderMap;
 
-use crate::transport::{NexusRequest, NexusTransport, NexusTransportError};
+use crate::transport::{CapabilityCall, CapabilityCaller, NexusTransport, NexusTransportError};
+
+/// ADR-029 capability id + target repo. The ADR-029 capability table names
+/// only `execution.task_completions` for this repo, but this gateway has two
+/// methods (the engagements read + the completion write) that shared no
+/// single path historically. Both are routed through this one capability id;
+/// the nexus fixture distinguishes them by payload (a bare `consultant_id`
+/// for the read vs. a `task_id`-carrying body for the write). This is the
+/// one place the ADR's table under-specifies (it omits an engagements-read
+/// id); routing both here keeps to the table's declared 14 capabilities.
+const CAPABILITY_TASK_COMPLETIONS: &str = "execution.task_completions";
+const TARGET_REPO: &str = "cognitum-execution";
 
 /// One assigned task within an [`EngagementSnapshot`]. Structured (not a
 /// bare `String`, unlike `workstreams`/`milestones` below) because
@@ -135,8 +144,6 @@ struct ConfirmTaskCompletionCommand<'a> {
 pub enum ExecutionGatewayError {
     #[error(transparent)]
     Transport(#[from] NexusTransportError),
-    #[error("Execution returned a non-success status {status}")]
-    UnexpectedStatus { status: reqwest::StatusCode },
     #[error("Execution returned a response body that did not match the expected shape: {0}")]
     UnexpectedResponseShape(#[source] serde_json::Error),
 }
@@ -173,15 +180,17 @@ pub trait ExecutionGateway: Send + Sync {
 /// [`ExecutionGateway`] implementation backed by a [`NexusTransport`]. See
 /// the module docs for the required transport decoration per method.
 pub struct NexusExecutionGateway {
-    transport: Arc<dyn NexusTransport>,
+    caller: CapabilityCaller,
 }
 
 impl NexusExecutionGateway {
     /// See the module docs for the required transport decoration (read
     /// timeout + optional retry for `request_assigned_engagements`; write
-    /// timeout, never retried, for `confirm_task_completion`).
+    /// timeout, never retried, for `confirm_task_completion`). The
+    /// `transport` is wrapped in a [`CapabilityCaller`] so each method
+    /// issues the ADR-029 capability envelope.
     pub fn new(transport: Arc<dyn NexusTransport>) -> Self {
-        Self { transport }
+        Self { caller: CapabilityCaller::new(transport) }
     }
 }
 
@@ -191,37 +200,29 @@ impl ExecutionGateway for NexusExecutionGateway {
         &self,
         consultant_id: &str,
     ) -> Result<Vec<EngagementSnapshot>, ExecutionGatewayError> {
-        let path = {
-            let mut query = url::form_urlencoded::Serializer::new(String::new());
-            query.append_pair("consultant_id", consultant_id);
-            format!("execution/v1/engagements?{}", query.finish())
-        };
-
-        let request = NexusRequest { method: Method::GET, path, headers: HeaderMap::new(), body: None };
-        let response = self.transport.send(request).await?;
-
-        if !response.status.is_success() {
-            return Err(ExecutionGatewayError::UnexpectedStatus { status: response.status });
-        }
+        let response_payload = self
+            .caller
+            .call(CapabilityCall {
+                capability_id: CAPABILITY_TASK_COMPLETIONS.to_owned(),
+                target_repo: TARGET_REPO.to_owned(),
+                payload: serde_json::json!({ "consultant_id": consultant_id }),
+            })
+            .await?;
 
         let envelope: EngagementsEnvelope =
-            serde_json::from_value(response.body).map_err(ExecutionGatewayError::UnexpectedResponseShape)?;
+            serde_json::from_value(response_payload).map_err(ExecutionGatewayError::UnexpectedResponseShape)?;
         Ok(envelope.engagements)
     }
 
     async fn confirm_task_completion(&self, task_id: &str, consultant_id: &str) -> Result<(), ExecutionGatewayError> {
         let command = ConfirmTaskCompletionCommand { task_id, consultant_id };
-        let request = NexusRequest {
-            method: Method::POST,
-            path: "execution/v1/task-completions".to_string(),
-            headers: HeaderMap::new(),
-            body: Some(serde_json::to_value(command).expect("command always serializes")),
-        };
-        let response = self.transport.send(request).await?;
-
-        if !response.status.is_success() {
-            return Err(ExecutionGatewayError::UnexpectedStatus { status: response.status });
-        }
+        self.caller
+            .call(CapabilityCall {
+                capability_id: CAPABILITY_TASK_COMPLETIONS.to_owned(),
+                target_repo: TARGET_REPO.to_owned(),
+                payload: serde_json::to_value(command).expect("command always serializes"),
+            })
+            .await?;
         Ok(())
     }
 }

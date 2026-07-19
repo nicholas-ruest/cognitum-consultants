@@ -423,7 +423,7 @@ mod tests {
                 _consultant_id: &str,
                 _credential: &str,
             ) -> Result<Vec<PermissionAssertion>, ArmorGatewayError> {
-                Err(ArmorGatewayError::InvalidCredential("boom".to_owned()))
+                Err(ArmorGatewayError::Transport(nexus_client::NexusTransportError::CircuitOpen))
             }
         }
 
@@ -443,7 +443,7 @@ mod tests {
                 _consultant_id: &str,
                 _credential: &str,
             ) -> Result<Vec<PermissionAssertion>, ArmorGatewayError> {
-                Err(ArmorGatewayError::InvalidCredential("boom".to_owned()))
+                Err(ArmorGatewayError::Transport(nexus_client::NexusTransportError::CircuitOpen))
             }
         }
 

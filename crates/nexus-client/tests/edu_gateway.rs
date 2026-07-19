@@ -1,17 +1,16 @@
 //! Wiremock-backed tests for the Edu ACL gateway (`EduGateway`,
-//! `NexusEduGateway`) — PROMPT-35.
+//! `NexusEduGateway`) — PROMPT-35, ADR-029.
 //!
-//! Mirrors `commit_gateway.rs`'s structure: a request-shape assertion for
-//! the one outbound call, several `LearningSnapshot` fixture scenarios (a
-//! completed course, an in-progress one, and a certification-pending one —
-//! proving the gateway against more than one shape of
-//! `progress_status`/`certification_status`), and a malformed-response
-//! error-not-panic case.
+//! Post-ADR-029 every call is `POST capabilities/edu.catalog` carrying a
+//! `CapabilityRequest` envelope; filters travel in the payload
+//! (`{"filters": [...]}`) rather than as repeated query params. The gateway
+//! unwraps `CapabilityResponse.payload`, still expecting a
+//! `{"snapshots": [...]}` object.
 
 use std::sync::Arc;
 
 use nexus_client::{EduGateway, EduGatewayError, NexusEduGateway};
-use wiremock::matchers::{method, path, query_param};
+use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn gateway_for(mock_server: &MockServer) -> NexusEduGateway {
@@ -20,13 +19,22 @@ fn gateway_for(mock_server: &MockServer) -> NexusEduGateway {
     NexusEduGateway::new(transport)
 }
 
+fn ok(payload: serde_json::Value) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "request_id": "req-test", "success": true, "payload": payload }))
+}
+
 #[tokio::test]
-async fn request_learning_catalog_sends_consultant_id_as_a_query_param_and_parses_the_envelope() {
+async fn request_learning_catalog_sends_consultant_id_in_the_payload_and_parses_the_envelope() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/edu/v1/catalog"))
-        .and(query_param("consultant_id", "consultant-1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    Mock::given(method("POST"))
+        .and(path("/capabilities/edu.catalog"))
+        .and(body_partial_json(serde_json::json!({
+            "capability_id": "edu.catalog",
+            "target_repo": "cognitum-edu",
+            "payload": { "consultant_id": "consultant-1" }
+        })))
+        .respond_with(ok(serde_json::json!({
             "snapshots": [
                 {
                     "course_id": "course-1",
@@ -63,13 +71,14 @@ async fn request_learning_catalog_sends_consultant_id_as_a_query_param_and_parse
 }
 
 #[tokio::test]
-async fn request_learning_catalog_sends_repeated_filter_query_params() {
+async fn request_learning_catalog_sends_filters_in_the_payload() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/edu/v1/catalog"))
-        .and(query_param("consultant_id", "consultant-1"))
-        .and(query_param("filter", "in_progress"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "snapshots": [] })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/edu.catalog"))
+        .and(body_partial_json(serde_json::json!({
+            "payload": { "consultant_id": "consultant-1", "filters": ["in_progress"] }
+        })))
+        .respond_with(ok(serde_json::json!({ "snapshots": [] })))
         .mount(&mock_server)
         .await;
 
@@ -83,9 +92,9 @@ async fn request_learning_catalog_sends_repeated_filter_query_params() {
 #[tokio::test]
 async fn request_learning_catalog_parses_a_training_due_fixture_with_no_certification() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/edu/v1/catalog"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+    Mock::given(method("POST"))
+        .and(path("/capabilities/edu.catalog"))
+        .respond_with(ok(serde_json::json!({
             "snapshots": [
                 {
                     "course_id": "course-3",
@@ -110,9 +119,9 @@ async fn request_learning_catalog_parses_a_training_due_fixture_with_no_certific
 #[tokio::test]
 async fn request_learning_catalog_handles_an_empty_result() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/edu/v1/catalog"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "snapshots": [] })))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/edu.catalog"))
+        .respond_with(ok(serde_json::json!({ "snapshots": [] })))
         .mount(&mock_server)
         .await;
 
@@ -123,12 +132,13 @@ async fn request_learning_catalog_handles_an_empty_result() {
 }
 
 #[tokio::test]
-async fn returns_gateway_error_not_panic_on_malformed_response() {
+async fn returns_gateway_error_not_panic_on_malformed_payload() {
     let mock_server = MockServer::start().await;
-    // A bare array instead of the expected `{"snapshots": [...]}` envelope.
-    Mock::given(method("GET"))
-        .and(path("/edu/v1/catalog"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+    // Well-formed envelope, but its `payload` is a bare array instead of the
+    // expected `{"snapshots": [...]}` object.
+    Mock::given(method("POST"))
+        .and(path("/capabilities/edu.catalog"))
+        .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
         .await;
 
@@ -142,10 +152,10 @@ async fn returns_gateway_error_not_panic_on_malformed_response() {
 }
 
 #[tokio::test]
-async fn returns_unexpected_status_error_on_non_success_response() {
+async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/edu/v1/catalog"))
+    Mock::given(method("POST"))
+        .and(path("/capabilities/edu.catalog"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;
@@ -154,7 +164,7 @@ async fn returns_unexpected_status_error_on_non_success_response() {
     let result = gateway.request_learning_catalog("consultant-1", None).await;
 
     match result {
-        Err(EduGatewayError::UnexpectedStatus { .. }) => {}
-        other => panic!("expected UnexpectedStatus error, got {other:?}"),
+        Err(EduGatewayError::Transport(_)) => {}
+        other => panic!("expected Transport error, got {other:?}"),
     }
 }

@@ -39,10 +39,14 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use reqwest::Method;
-use reqwest::header::HeaderMap;
 
-use crate::transport::{NexusRequest, NexusTransport, NexusTransportError};
+use crate::transport::{CapabilityCall, CapabilityCaller, NexusTransport, NexusTransportError};
+
+/// ADR-029 capability ids + target repo for this gateway's three calls.
+const CAPABILITY_ACCOUNT_CLAIMS: &str = "sales.account_claims";
+const CAPABILITY_COLLABORATION_REQUESTS: &str = "sales.collaboration_requests";
+const CAPABILITY_REFERRALS: &str = "sales.referrals";
+const TARGET_REPO: &str = "cognitum-sales";
 
 /// Sales' opaque verdict on a company/lead claim check. This repo never
 /// models Sales' internal Company/Lead/Contact/Opportunity graph — only
@@ -99,8 +103,6 @@ struct SubmitReferralCommand<'a> {
 pub enum SalesGatewayError {
     #[error(transparent)]
     Transport(#[from] NexusTransportError),
-    #[error("Sales returned a non-success status {status}")]
-    UnexpectedStatus { status: reqwest::StatusCode },
     #[error("Sales returned a response body that did not match the expected shape: {0}")]
     UnexpectedResponseShape(#[source] serde_json::Error),
 }
@@ -176,24 +178,27 @@ pub trait SalesGateway: Send + Sync {
 /// the same non-retrying stack for all three (safe default) or construct
 /// two `NexusSalesGateway` instances, one per timeout/retry profile.
 pub struct NexusSalesGateway {
-    transport: Arc<dyn NexusTransport>,
+    caller: CapabilityCaller,
 }
 
 impl NexusSalesGateway {
     /// See the struct doc comment for the required transport decoration
     /// (write timeout budget; retry only safe for `check_account_claim`).
+    /// The `transport` is wrapped in a [`CapabilityCaller`] so each method
+    /// issues the ADR-029 capability envelope.
     pub fn new(transport: Arc<dyn NexusTransport>) -> Self {
-        Self { transport }
+        Self { caller: CapabilityCaller::new(transport) }
     }
 
-    async fn post_command(&self, path: &str, body: serde_json::Value) -> Result<serde_json::Value, SalesGatewayError> {
-        let request = NexusRequest { method: Method::POST, path: path.to_string(), headers: HeaderMap::new(), body: Some(body) };
-        let response = self.transport.send(request).await?;
-
-        if !response.status.is_success() {
-            return Err(SalesGatewayError::UnexpectedStatus { status: response.status });
-        }
-        Ok(response.body)
+    async fn call(
+        &self,
+        capability_id: &str,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, SalesGatewayError> {
+        Ok(self
+            .caller
+            .call(CapabilityCall { capability_id: capability_id.to_owned(), target_repo: TARGET_REPO.to_owned(), payload })
+            .await?)
     }
 }
 
@@ -205,10 +210,10 @@ impl SalesGateway for NexusSalesGateway {
         consultant_id: &str,
     ) -> Result<AccountClaimResult, SalesGatewayError> {
         let command = CheckAccountClaimCommand { company_name, normalized_domain: None, consultant_id };
-        let body = self
-            .post_command("sales/v1/account-claims", serde_json::to_value(command).expect("command always serializes"))
+        let payload = self
+            .call(CAPABILITY_ACCOUNT_CLAIMS, serde_json::to_value(command).expect("command always serializes"))
             .await?;
-        serde_json::from_value(body).map_err(SalesGatewayError::UnexpectedResponseShape)
+        serde_json::from_value(payload).map_err(SalesGatewayError::UnexpectedResponseShape)
     }
 
     async fn request_collaboration(
@@ -218,11 +223,8 @@ impl SalesGateway for NexusSalesGateway {
         message: Option<&str>,
     ) -> Result<(), SalesGatewayError> {
         let command = RequestCollaborationCommand { company_reference, consultant_id, message };
-        self.post_command(
-            "sales/v1/collaboration-requests",
-            serde_json::to_value(command).expect("command always serializes"),
-        )
-        .await?;
+        self.call(CAPABILITY_COLLABORATION_REQUESTS, serde_json::to_value(command).expect("command always serializes"))
+            .await?;
         Ok(())
     }
 
@@ -233,7 +235,7 @@ impl SalesGateway for NexusSalesGateway {
         notes: Option<&str>,
     ) -> Result<(), SalesGatewayError> {
         let command = SubmitReferralCommand { company_reference, consultant_id, notes };
-        self.post_command("sales/v1/referrals", serde_json::to_value(command).expect("command always serializes")).await?;
+        self.call(CAPABILITY_REFERRALS, serde_json::to_value(command).expect("command always serializes")).await?;
         Ok(())
     }
 }
