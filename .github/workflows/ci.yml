@@ -177,10 +177,25 @@ jobs:
         run: |
           docker run -d --name deploy-postgres -p 5432:5432 \
             -e POSTGRES_PASSWORD=postgres postgres:17-alpine
+
+          # `pg_isready` alone races the official image's own restart: it
+          # runs a fully functional *transient* server for `initdb`/init
+          # scripts (which answers `pg_isready` -- and even real queries --
+          # just fine), then shuts that down and starts the real, final
+          # server. Proceeding straight to `psql` after `pg_isready` passes
+          # can land in the gap between those two, seeing "No such file or
+          # directory" on the socket (see `frontend/e2e/support/test-stack.ts`'s
+          # `startPostgresContainer`, which hit and fixed this same race).
+          # The entrypoint's own "database system is ready to accept
+          # connections" log line prints once for the transient instance and
+          # again for the final one -- wait for it twice before touching
+          # `psql` at all.
           for _ in $(seq 1 60); do
-            docker exec deploy-postgres pg_isready -U postgres && break
+            occurrences=$(docker logs deploy-postgres 2>&1 | grep -c "database system is ready to accept connections")
+            [ "$occurrences" -ge 2 ] && break
             sleep 1
           done
+          docker exec deploy-postgres pg_isready -U postgres
 
       # Explicit pre-rollout migration step (ADR-014), independent of
       # whether the image being deployed happens to run them itself.
