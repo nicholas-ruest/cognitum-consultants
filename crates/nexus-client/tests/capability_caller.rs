@@ -23,7 +23,7 @@ fn call(capability_id: &str, payload: serde_json::Value) -> CapabilityCall {
 async fn posts_to_the_capability_route_with_a_full_envelope_and_unwraps_the_payload() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/sales.account_claims"))
+        .and(path("/api/v1/capabilities/sales.account_claims"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "request_id": "resp-1",
             "success": true,
@@ -60,7 +60,7 @@ async fn posts_to_the_capability_route_with_a_full_envelope_and_unwraps_the_payl
 async fn surfaces_a_capability_failure_with_its_error_message() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/sales.account_claims"))
+        .and(path("/api/v1/capabilities/sales.account_claims"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "request_id": "resp-2",
             "success": false,
@@ -85,7 +85,7 @@ async fn surfaces_a_capability_failure_with_its_error_message() {
 async fn surfaces_a_non_success_http_status_as_unexpected_status() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/sales.account_claims"))
+        .and(path("/api/v1/capabilities/sales.account_claims"))
         .respond_with(ResponseTemplate::new(404))
         .mount(&mock_server)
         .await;
@@ -105,7 +105,7 @@ async fn surfaces_a_non_success_http_status_as_unexpected_status() {
 async fn propagates_the_correlation_id_into_the_envelope_when_a_scope_is_active() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/sales.account_claims"))
+        .and(path("/api/v1/capabilities/sales.account_claims"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "request_id": "resp-3",
             "success": true,

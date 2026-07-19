@@ -38,7 +38,7 @@ fn profile_fixture() -> ConsultantProfileIntake {
 async fn update_own_profile_sends_correct_envelope_payload_and_parses_an_accepted_fixture() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/capacity.profile"))
+        .and(path("/api/v1/capabilities/capacity.profile"))
         .and(body_partial_json(serde_json::json!({
             "capability_id": "capacity.profile",
             "target_repo": "cognitum-capacity",
@@ -71,7 +71,7 @@ async fn update_own_profile_sends_correct_envelope_payload_and_parses_an_accepte
 async fn update_own_profile_parses_a_rejected_fixture_with_a_reason() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/capacity.profile"))
+        .and(path("/api/v1/capabilities/capacity.profile"))
         .respond_with(ok(serde_json::json!({
             "accepted": false,
             "reason": "availability_window overlaps an existing commitment"
@@ -90,7 +90,7 @@ async fn update_own_profile_parses_a_rejected_fixture_with_a_reason() {
 async fn get_own_profile_sends_consultant_id_in_the_payload_and_parses_the_profile() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/capacity.profile"))
+        .and(path("/api/v1/capabilities/capacity.profile"))
         .and(body_partial_json(serde_json::json!({ "payload": { "consultant_id": "consultant-1" } })))
         .respond_with(ok(serde_json::json!({
             "skills": ["Rust", "Cloud Architecture"],
@@ -112,7 +112,7 @@ async fn get_own_profile_sends_consultant_id_in_the_payload_and_parses_the_profi
 async fn get_own_profile_handles_an_empty_profile() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/capacity.profile"))
+        .and(path("/api/v1/capabilities/capacity.profile"))
         .respond_with(ok(serde_json::json!({
             "skills": [],
             "certifications": [],
@@ -136,7 +136,7 @@ async fn returns_gateway_error_not_panic_on_malformed_update_own_profile_payload
     // Well-formed envelope, but its `payload` is missing the required
     // `accepted` field.
     Mock::given(method("POST"))
-        .and(path("/capabilities/capacity.profile"))
+        .and(path("/api/v1/capabilities/capacity.profile"))
         .respond_with(ok(serde_json::json!({ "unexpected": "shape" })))
         .mount(&mock_server)
         .await;
@@ -156,7 +156,7 @@ async fn returns_gateway_error_not_panic_on_malformed_get_own_profile_payload() 
     // Well-formed envelope, but its `payload` is a bare array instead of a
     // `ConsultantProfileIntake` object.
     Mock::given(method("POST"))
-        .and(path("/capabilities/capacity.profile"))
+        .and(path("/api/v1/capabilities/capacity.profile"))
         .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
         .await;
@@ -174,7 +174,7 @@ async fn returns_gateway_error_not_panic_on_malformed_get_own_profile_payload() 
 async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/capacity.profile"))
+        .and(path("/api/v1/capabilities/capacity.profile"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;

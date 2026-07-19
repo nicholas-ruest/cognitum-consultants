@@ -29,7 +29,7 @@ fn ok(payload: serde_json::Value) -> ResponseTemplate {
 async fn create_proposal_sends_correct_envelope_payload_and_parses_a_draft_fixture() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/commit.proposals"))
+        .and(path("/api/v1/capabilities/commit.proposals"))
         .and(body_partial_json(serde_json::json!({
             "capability_id": "commit.proposals",
             "target_repo": "cognitum-commit",
@@ -64,7 +64,7 @@ async fn create_proposal_sends_correct_envelope_payload_and_parses_a_draft_fixtu
 async fn create_proposal_parses_a_fixture_with_no_deep_link() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/commit.proposals"))
+        .and(path("/api/v1/capabilities/commit.proposals"))
         .respond_with(ok(serde_json::json!({
             "proposal_id": "proposal-2",
             "title": "Beta LLC Engagement Proposal",
@@ -87,7 +87,7 @@ async fn create_proposal_parses_a_fixture_with_no_deep_link() {
 async fn list_proposals_sends_consultant_id_in_the_payload_and_parses_the_envelope() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/commit.proposals"))
+        .and(path("/api/v1/capabilities/commit.proposals"))
         .and(body_partial_json(serde_json::json!({ "payload": { "consultant_id": "consultant-1" } })))
         .respond_with(ok(serde_json::json!({
             "proposals": [
@@ -125,7 +125,7 @@ async fn list_proposals_sends_consultant_id_in_the_payload_and_parses_the_envelo
 async fn list_proposals_handles_an_empty_result() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/commit.proposals"))
+        .and(path("/api/v1/capabilities/commit.proposals"))
         .respond_with(ok(serde_json::json!({ "proposals": [] })))
         .mount(&mock_server)
         .await;
@@ -140,7 +140,7 @@ async fn list_proposals_handles_an_empty_result() {
 async fn request_proposal_action_sends_correct_envelope_payload_and_handles_success() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/commit.proposal_actions"))
+        .and(path("/api/v1/capabilities/commit.proposal_actions"))
         .and(body_partial_json(serde_json::json!({
             "capability_id": "commit.proposal_actions",
             "payload": { "proposal_id": "proposal-1", "action": "request_revision" }
@@ -162,7 +162,7 @@ async fn returns_gateway_error_not_panic_on_malformed_create_proposal_payload() 
     let mock_server = MockServer::start().await;
     // Well-formed envelope, but its `payload` is missing required fields.
     Mock::given(method("POST"))
-        .and(path("/capabilities/commit.proposals"))
+        .and(path("/api/v1/capabilities/commit.proposals"))
         .and(body_partial_json(serde_json::json!({ "payload": { "origin_reference": "acme-corp" } })))
         .respond_with(ok(serde_json::json!({ "unexpected": "shape" })))
         .mount(&mock_server)
@@ -183,7 +183,7 @@ async fn returns_gateway_error_not_panic_on_malformed_list_proposals_payload() {
     // Well-formed envelope, but its `payload` is a bare array instead of the
     // expected `{"proposals": [...]}` object.
     Mock::given(method("POST"))
-        .and(path("/capabilities/commit.proposals"))
+        .and(path("/api/v1/capabilities/commit.proposals"))
         .and(body_partial_json(serde_json::json!({ "payload": { "consultant_id": "consultant-1" } })))
         .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
@@ -202,7 +202,7 @@ async fn returns_gateway_error_not_panic_on_malformed_list_proposals_payload() {
 async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/commit.proposal_actions"))
+        .and(path("/api/v1/capabilities/commit.proposal_actions"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;

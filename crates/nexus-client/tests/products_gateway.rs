@@ -28,7 +28,7 @@ fn ok(payload: serde_json::Value) -> ResponseTemplate {
 async fn request_product_catalog_sends_an_empty_payload_and_parses_the_envelope() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/products.catalog"))
+        .and(path("/api/v1/capabilities/products.catalog"))
         .and(body_partial_json(serde_json::json!({
             "capability_id": "products.catalog",
             "target_repo": "cognitum-products",
@@ -72,7 +72,7 @@ async fn request_product_catalog_sends_an_empty_payload_and_parses_the_envelope(
 async fn request_product_catalog_sends_filters_in_the_payload() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/products.catalog"))
+        .and(path("/api/v1/capabilities/products.catalog"))
         .and(body_partial_json(serde_json::json!({ "payload": { "filters": ["cloud"] } })))
         .respond_with(ok(serde_json::json!({ "cards": [] })))
         .mount(&mock_server)
@@ -89,7 +89,7 @@ async fn request_product_catalog_sends_filters_in_the_payload() {
 async fn request_product_catalog_defaults_missing_demo_assets_to_an_empty_list() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/products.catalog"))
+        .and(path("/api/v1/capabilities/products.catalog"))
         .respond_with(ok(serde_json::json!({
             "cards": [
                 {
@@ -114,7 +114,7 @@ async fn request_product_catalog_defaults_missing_demo_assets_to_an_empty_list()
 async fn request_product_catalog_handles_an_empty_result() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/products.catalog"))
+        .and(path("/api/v1/capabilities/products.catalog"))
         .respond_with(ok(serde_json::json!({ "cards": [] })))
         .mount(&mock_server)
         .await;
@@ -131,7 +131,7 @@ async fn returns_gateway_error_not_panic_on_malformed_payload() {
     // Well-formed envelope, but its `payload` is a bare array instead of the
     // expected `{"cards": [...]}` object.
     Mock::given(method("POST"))
-        .and(path("/capabilities/products.catalog"))
+        .and(path("/api/v1/capabilities/products.catalog"))
         .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
         .await;
@@ -149,7 +149,7 @@ async fn returns_gateway_error_not_panic_on_malformed_payload() {
 async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/products.catalog"))
+        .and(path("/api/v1/capabilities/products.catalog"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;

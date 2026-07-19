@@ -27,7 +27,7 @@ fn ok(payload: serde_json::Value) -> ResponseTemplate {
 async fn request_assigned_customer_context_sends_consultant_id_in_the_payload_and_parses_the_envelope() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/customer.context"))
+        .and(path("/api/v1/capabilities/customer.context"))
         .and(body_partial_json(serde_json::json!({
             "capability_id": "customer.context",
             "target_repo": "cognitum-customer",
@@ -72,7 +72,7 @@ async fn request_assigned_customer_context_sends_consultant_id_in_the_payload_an
 async fn request_assigned_customer_context_sends_an_optional_customer_id_in_the_payload_when_narrowing() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/customer.context"))
+        .and(path("/api/v1/capabilities/customer.context"))
         .and(body_partial_json(serde_json::json!({
             "payload": { "consultant_id": "consultant-1", "customer_id": "customer-2" }
         })))
@@ -104,7 +104,7 @@ async fn request_assigned_customer_context_sends_an_optional_customer_id_in_the_
 async fn request_assigned_customer_context_handles_an_empty_result() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/customer.context"))
+        .and(path("/api/v1/capabilities/customer.context"))
         .respond_with(ok(serde_json::json!({ "contexts": [] })))
         .mount(&mock_server)
         .await;
@@ -121,7 +121,7 @@ async fn returns_gateway_error_not_panic_on_malformed_payload() {
     // Well-formed envelope, but its `payload` is a bare array instead of the
     // expected `{"contexts": [...]}` object.
     Mock::given(method("POST"))
-        .and(path("/capabilities/customer.context"))
+        .and(path("/api/v1/capabilities/customer.context"))
         .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
         .await;
@@ -139,7 +139,7 @@ async fn returns_gateway_error_not_panic_on_malformed_payload() {
 async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/customer.context"))
+        .and(path("/api/v1/capabilities/customer.context"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;

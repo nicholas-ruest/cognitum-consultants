@@ -30,7 +30,7 @@ fn ok(payload: serde_json::Value) -> ResponseTemplate {
 async fn request_approved_clauses_by_proposal_id_parses_a_multi_item_fixture() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/legal.clauses"))
+        .and(path("/api/v1/capabilities/legal.clauses"))
         .and(body_partial_json(serde_json::json!({
             "capability_id": "legal.clauses",
             "target_repo": "cognitum-legal",
@@ -73,7 +73,7 @@ async fn request_approved_clauses_by_proposal_id_parses_a_multi_item_fixture() {
 async fn request_approved_clauses_by_topic_sends_the_topic_in_the_payload() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/legal.clauses"))
+        .and(path("/api/v1/capabilities/legal.clauses"))
         .and(body_partial_json(serde_json::json!({ "payload": { "topic": "data-residency" } })))
         .respond_with(ok(serde_json::json!({ "clauses": [] })))
         .mount(&mock_server)
@@ -89,7 +89,7 @@ async fn request_approved_clauses_by_topic_sends_the_topic_in_the_payload() {
 async fn request_approved_clauses_handles_an_empty_result() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/legal.clauses"))
+        .and(path("/api/v1/capabilities/legal.clauses"))
         .respond_with(ok(serde_json::json!({ "clauses": [] })))
         .mount(&mock_server)
         .await;
@@ -106,7 +106,7 @@ async fn returns_gateway_error_not_panic_on_malformed_clauses_payload() {
     // The envelope is well-formed, but its `payload` is a bare array instead
     // of the expected `{"clauses": [...]}` object.
     Mock::given(method("POST"))
-        .and(path("/capabilities/legal.clauses"))
+        .and(path("/api/v1/capabilities/legal.clauses"))
         .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
         .await;
@@ -124,7 +124,7 @@ async fn returns_gateway_error_not_panic_on_malformed_clauses_payload() {
 async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/legal.clauses"))
+        .and(path("/api/v1/capabilities/legal.clauses"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;
@@ -143,7 +143,7 @@ async fn returns_transport_error_when_capability_reports_failure() {
     let mock_server = MockServer::start().await;
     // HTTP 200 but the capability envelope reports a business-level failure.
     Mock::given(method("POST"))
-        .and(path("/capabilities/legal.clauses"))
+        .and(path("/api/v1/capabilities/legal.clauses"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "request_id": "req-test",
             "success": false,

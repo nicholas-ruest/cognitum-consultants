@@ -28,7 +28,7 @@ fn ok(payload: serde_json::Value) -> ResponseTemplate {
 async fn request_intelligence_digest_parses_a_multi_item_fixture() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/landscape.intelligence"))
+        .and(path("/api/v1/capabilities/landscape.intelligence"))
         .respond_with(ok(serde_json::json!({
             "items": [
                 {
@@ -69,7 +69,7 @@ async fn request_intelligence_digest_parses_a_multi_item_fixture() {
 async fn request_intelligence_digest_handles_an_empty_result() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/landscape.intelligence"))
+        .and(path("/api/v1/capabilities/landscape.intelligence"))
         .respond_with(ok(serde_json::json!({ "items": [] })))
         .mount(&mock_server)
         .await;
@@ -86,7 +86,7 @@ async fn returns_gateway_error_not_panic_on_malformed_intelligence_digest_payloa
     // Well-formed envelope, but its `payload` is a bare array instead of the
     // expected `{"items": [...]}` object.
     Mock::given(method("POST"))
-        .and(path("/capabilities/landscape.intelligence"))
+        .and(path("/api/v1/capabilities/landscape.intelligence"))
         .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
         .await;
@@ -104,7 +104,7 @@ async fn returns_gateway_error_not_panic_on_malformed_intelligence_digest_payloa
 async fn submit_field_observation_sends_the_submission_in_the_payload() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/landscape.observations"))
+        .and(path("/api/v1/capabilities/landscape.observations"))
         .and(body_partial_json(serde_json::json!({
             "capability_id": "landscape.observations",
             "target_repo": "cognitum-landscape",
@@ -135,7 +135,7 @@ async fn submit_field_observation_sends_the_submission_in_the_payload() {
 async fn submit_field_observation_omits_related_company_reference_when_none() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/landscape.observations"))
+        .and(path("/api/v1/capabilities/landscape.observations"))
         .and(body_partial_json(serde_json::json!({
             "payload": {
                 "observation_text": "General market shift noted, no specific client tied to it.",
@@ -161,7 +161,7 @@ async fn submit_field_observation_omits_related_company_reference_when_none() {
 async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/landscape.observations"))
+        .and(path("/api/v1/capabilities/landscape.observations"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;

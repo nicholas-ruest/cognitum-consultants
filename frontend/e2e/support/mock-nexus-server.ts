@@ -6,7 +6,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * at the HTTP boundary, per ADR-007: `nexus-client`'s `ReqwestNexusTransport`
  * only needs `NEXUS_ENDPOINT_URL` pointed at *something* that speaks the
  * real capability envelope `crates/nexus-client/src/transport.rs`'s
- * `CapabilityCaller` issues (ADR-029: `POST capabilities/:capability_id`,
+ * `CapabilityCaller` issues (ADR-029: `POST api/v1/capabilities/:capability_id`,
  * body a `CapabilityRequest` envelope, response a `CapabilityResponse`
  * envelope) — it has no idea (and no way to tell) whether that's the real
  * Nexus or this stand-in. This is the same pattern manual verification used
@@ -24,7 +24,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * nexus's real capability envelope` (commit 8ea7a9b) migrated every
  * `nexus-client` gateway off its own provisional REST-ish path
  * (`armor/v1/assertions`, `sales/v1/account-claims`, etc.) onto one real
- * route nexus-server exposes: `POST capabilities/:capability_id`, with the
+ * route nexus-server exposes: `POST api/v1/capabilities/:capability_id`, with the
  * request/response bodies wrapped in the `CapabilityRequest`/
  * `CapabilityResponse` envelope `crates/nexus-client/src/transport.rs`
  * builds and unwraps. This mock was not updated in that commit, so it kept
@@ -32,7 +32,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http'
  * harness's own login/e2e regressions were fixed enough to reach an actual
  * `GET`/`PUT /api/dashboard` call, at which point every dashboard-gating
  * `is_permitted` check failed (the real `bff-api` was issuing
- * `POST capabilities/armor.assertions`, this mock 404is on it, `bff-api`
+ * `POST api/v1/capabilities/armor.assertions`, this mock 404is on it, `bff-api`
  * fell back to an empty assertion set) — see this repo's e2e-fix commit
  * history for the full diagnosis. This file now answers the one real route
  * instead, dispatching on `capability_id` (and, for the three ids two
@@ -506,7 +506,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
     })
   })
 
-  const CAPABILITIES_PATH_PREFIX = '/capabilities/'
+  const CAPABILITIES_PATH_PREFIX = '/api/v1/capabilities/'
 
   async function handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? '/', `http://127.0.0.1:${port}`)

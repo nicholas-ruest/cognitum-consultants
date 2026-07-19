@@ -44,7 +44,7 @@ async fn parses_five_varied_permission_assertions() {
         assertion_json("consultant-1", "capacity.request", "team:alpha", "2026-12-31T23:59:59Z"),
     ];
     Mock::given(method("POST"))
-        .and(path("/capabilities/armor.assertions"))
+        .and(path("/api/v1/capabilities/armor.assertions"))
         .and(body_partial_json(serde_json::json!({
             "capability_id": "armor.assertions",
             "target_repo": "cognitum-armor",
@@ -70,7 +70,7 @@ async fn parses_exactly_one_permission_assertion() {
     let mock_server = MockServer::start().await;
     let assertions = vec![assertion_json("consultant-2", "dashboard.view", "global", "2026-08-01T00:00:00Z")];
     Mock::given(method("POST"))
-        .and(path("/capabilities/armor.assertions"))
+        .and(path("/api/v1/capabilities/armor.assertions"))
         .respond_with(ok(serde_json::json!({ "assertions": assertions })))
         .mount(&mock_server)
         .await;
@@ -86,7 +86,7 @@ async fn parses_exactly_one_permission_assertion() {
 async fn returns_empty_vec_for_zero_permission_assertions() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/armor.assertions"))
+        .and(path("/api/v1/capabilities/armor.assertions"))
         .respond_with(ok(serde_json::json!({ "assertions": [] })))
         .mount(&mock_server)
         .await;
@@ -104,7 +104,7 @@ async fn returns_gateway_error_not_panic_on_malformed_payload_shape() {
     // array, missing the `assertions` field) — this must surface as an
     // error, not a panic.
     Mock::given(method("POST"))
-        .and(path("/capabilities/armor.assertions"))
+        .and(path("/api/v1/capabilities/armor.assertions"))
         .respond_with(ok(serde_json::json!([{ "unexpected": "shape" }])))
         .mount(&mock_server)
         .await;
@@ -122,7 +122,7 @@ async fn returns_gateway_error_not_panic_on_malformed_payload_shape() {
 async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/armor.assertions"))
+        .and(path("/api/v1/capabilities/armor.assertions"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;

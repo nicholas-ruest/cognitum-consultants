@@ -7,7 +7,7 @@ use reqwest::{Method, StatusCode, header::HeaderMap};
 pub struct NexusRequest {
     pub method: Method,
     /// Relative to the configured Nexus base URL. MUST NOT have a leading
-    /// `/` — e.g. `"capabilities/sales.account_claims"`.
+    /// `/` — e.g. `"api/v1/capabilities/sales.account_claims"`.
     pub path: String,
     /// Caller-supplied headers. MUST NOT set `x-correlation-id` or
     /// `traceparent` — the transport overwrites both unconditionally.
@@ -64,8 +64,16 @@ pub trait NexusTransport: Send + Sync {
 /// The one real synchronous route `nexus-server` exposes
 /// (`POST /api/v1/capabilities/:capability_id`, ADR-029). Every gateway
 /// call is this same POST; the `capability_id` is the only path variable.
-/// Kept here so the `capabilities/{id}` join convention lives in one place.
-const CAPABILITIES_PATH_PREFIX: &str = "capabilities/";
+/// Kept here so the `api/v1/capabilities/{id}` join convention lives in one
+/// place. **Must match nexus-server's real mount exactly** — this constant
+/// previously read `"capabilities/"` (missing the `api/v1/` prefix), which
+/// silently 404'd against the real deployed nexus-server (verified live:
+/// `POST capabilities/armor.assertions` -> Cloud Run's own generic 404,
+/// `POST api/v1/capabilities/armor.assertions` -> nexus-server's own
+/// `{"error":"missing bearer token"}`) — invisible in this repo's own e2e
+/// suite because the mock Nexus server answered whatever path it was
+/// given, so the wrong path never failed a test, only the real deploy.
+const CAPABILITIES_PATH_PREFIX: &str = "api/v1/capabilities/";
 
 /// Placeholder caller organization id. `cognitum-consultants`'s session
 /// (`auth::Session`, ADR-008 interim dev-stub) carries only a

@@ -29,7 +29,7 @@ fn ok(payload: serde_json::Value) -> ResponseTemplate {
 async fn request_assigned_engagements_sends_consultant_id_in_the_payload_and_parses_the_envelope() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/execution.task_completions"))
+        .and(path("/api/v1/capabilities/execution.task_completions"))
         .and(body_partial_json(serde_json::json!({
             "capability_id": "execution.task_completions",
             "target_repo": "cognitum-execution",
@@ -86,7 +86,7 @@ async fn request_assigned_engagements_sends_consultant_id_in_the_payload_and_par
 async fn request_assigned_engagements_handles_an_empty_result() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/execution.task_completions"))
+        .and(path("/api/v1/capabilities/execution.task_completions"))
         .respond_with(ok(serde_json::json!({ "engagements": [] })))
         .mount(&mock_server)
         .await;
@@ -101,7 +101,7 @@ async fn request_assigned_engagements_handles_an_empty_result() {
 async fn confirm_task_completion_sends_correct_envelope_payload_and_handles_success() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/execution.task_completions"))
+        .and(path("/api/v1/capabilities/execution.task_completions"))
         .and(body_partial_json(serde_json::json!({
             "capability_id": "execution.task_completions",
             "payload": { "task_id": "task-1", "consultant_id": "consultant-1" }
@@ -124,7 +124,7 @@ async fn returns_gateway_error_not_panic_on_malformed_engagements_payload() {
     // Well-formed envelope, but its `payload` is a bare array instead of the
     // expected `{"engagements": [...]}` object.
     Mock::given(method("POST"))
-        .and(path("/capabilities/execution.task_completions"))
+        .and(path("/api/v1/capabilities/execution.task_completions"))
         .and(body_partial_json(serde_json::json!({ "payload": { "consultant_id": "consultant-1" } })))
         .respond_with(ok(serde_json::json!([])))
         .mount(&mock_server)
@@ -143,7 +143,7 @@ async fn returns_gateway_error_not_panic_on_malformed_engagements_payload() {
 async fn returns_transport_error_on_non_success_status() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/execution.task_completions"))
+        .and(path("/api/v1/capabilities/execution.task_completions"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;

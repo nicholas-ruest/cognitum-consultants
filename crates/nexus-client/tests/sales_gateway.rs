@@ -28,7 +28,7 @@ fn ok(payload: serde_json::Value) -> ResponseTemplate {
 async fn parses_active_owned_account_worked_example() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/sales.account_claims"))
+        .and(path("/api/v1/capabilities/sales.account_claims"))
         .respond_with(ok(serde_json::json!({
             "match_status": "active_owned_account",
             "creation_allowed": false,
@@ -51,7 +51,7 @@ async fn parses_active_owned_account_worked_example() {
 async fn parses_available_claim_fixture() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/sales.account_claims"))
+        .and(path("/api/v1/capabilities/sales.account_claims"))
         .respond_with(ok(serde_json::json!({
             "match_status": "available_claim",
             "creation_allowed": true,
@@ -73,7 +73,7 @@ async fn parses_available_claim_fixture() {
 async fn parses_no_match_fixture() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/sales.account_claims"))
+        .and(path("/api/v1/capabilities/sales.account_claims"))
         .respond_with(ok(serde_json::json!({
             "match_status": "no_match",
             "creation_allowed": true,
@@ -95,7 +95,7 @@ async fn parses_no_match_fixture() {
 async fn check_account_claim_sends_correct_envelope_payload() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/sales.account_claims"))
+        .and(path("/api/v1/capabilities/sales.account_claims"))
         .and(body_partial_json(serde_json::json!({
             "capability_id": "sales.account_claims",
             "target_repo": "cognitum-sales",
@@ -121,7 +121,7 @@ async fn check_account_claim_sends_correct_envelope_payload() {
 async fn request_collaboration_sends_correct_envelope_payload_and_handles_success() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/sales.collaboration_requests"))
+        .and(path("/api/v1/capabilities/sales.collaboration_requests"))
         .and(body_partial_json(serde_json::json!({
             "capability_id": "sales.collaboration_requests",
             "payload": {
@@ -148,7 +148,7 @@ async fn request_collaboration_sends_correct_envelope_payload_and_handles_succes
 async fn submit_referral_sends_correct_envelope_payload_and_handles_success() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/sales.referrals"))
+        .and(path("/api/v1/capabilities/sales.referrals"))
         .and(body_partial_json(serde_json::json!({
             "capability_id": "sales.referrals",
             "payload": {
@@ -174,7 +174,7 @@ async fn returns_gateway_error_not_panic_on_malformed_account_claim_payload() {
     let mock_server = MockServer::start().await;
     // Well-formed envelope, but its `payload` is missing required fields.
     Mock::given(method("POST"))
-        .and(path("/capabilities/sales.account_claims"))
+        .and(path("/api/v1/capabilities/sales.account_claims"))
         .respond_with(ok(serde_json::json!({ "unexpected": "shape" })))
         .mount(&mock_server)
         .await;
@@ -192,7 +192,7 @@ async fn returns_gateway_error_not_panic_on_malformed_account_claim_payload() {
 async fn returns_transport_error_when_capability_reports_failure() {
     let mock_server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/capabilities/sales.account_claims"))
+        .and(path("/api/v1/capabilities/sales.account_claims"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "request_id": "req-test",
             "success": false,
