@@ -19,6 +19,14 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 }
 
-const app = initializeApp(firebaseConfig)
-export const firebaseAuth = getAuth(app)
+// `initializeApp`/`getAuth` throw synchronously (`auth/invalid-api-key`) the
+// moment `apiKey` is empty -- true for every build without Firebase baked in
+// (plain `npm run dev`, the e2e suite, any `bff-api` dev-stub-only
+// environment). `LoginPage.tsx` imports `firebaseAuth` unconditionally, so
+// without this guard that throw happens at import time and crashes the
+// whole app before `LoginPage`'s own `firebaseConfigured` fallback logic
+// ever gets a chance to run. `loginWithGoogle` there only dereferences
+// `firebaseAuth` when `firebaseConfigured` is true, so it's non-null on
+// every reachable call.
+export const firebaseAuth = firebaseConfig.apiKey ? getAuth(initializeApp(firebaseConfig)) : null
 export const googleAuthProvider = new GoogleAuthProvider()

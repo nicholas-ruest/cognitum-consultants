@@ -32,7 +32,7 @@ function mockNexusBaseUrl(): string {
 test('logs in, checks a company for a sales conflict, and requests collaboration', async ({ page, request }) => {
   // 1. Load the app unauthenticated — LoginPage.
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: 'Sign in', level: 3 })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
 
   // 2. Log in via the dev-stub, through the UI's login form (PROMPT-18).
   await page.getByRole('button', { name: 'Sign in' }).click()

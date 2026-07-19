@@ -37,7 +37,7 @@ test('drives the Sales conflict check (no_match) through the Commit deep link to
 }) => {
   // 1. Load the app unauthenticated, log in.
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: 'Sign in', level: 3 })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
   await page.getByRole('button', { name: 'Sign in' }).click()
 
   // 2. Dashboard renders both the Sales and Commit cards — proves the mock
