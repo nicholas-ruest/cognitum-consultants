@@ -21,8 +21,8 @@ const LOG_LEVEL_ENV: &str = "RUST_LOG";
 const NEXUS_ENDPOINT_URL_ENV: &str = "NEXUS_ENDPOINT_URL";
 const APP_ENV_ENV: &str = "APP_ENV";
 const STATIC_DIR_ENV: &str = "STATIC_DIR";
-const EVENT_POLL_INTERVAL_SECONDS_ENV: &str = "EVENT_POLL_INTERVAL_SECONDS";
 const FIREBASE_PROJECT_ID_ENV: &str = "FIREBASE_PROJECT_ID";
+const NEXUS_CALLER_SERVICE_ACCOUNT_EMAIL_ENV: &str = "NEXUS_CALLER_SERVICE_ACCOUNT_EMAIL";
 
 const DEFAULT_DATABASE_URL: &str = "postgres://localhost:5432/cognitum_consultants";
 const DEFAULT_PORT: u16 = 3000;
@@ -39,14 +39,6 @@ const DEFAULT_APP_ENV: &str = "dev";
 /// The value [`Config::environment`] must equal for dev-only code paths
 /// (e.g. `auth`'s `dev-auth` stub, ADR-008) to be allowed to activate.
 pub const DEV_ENVIRONMENT: &str = "dev";
-/// Default interval, in seconds, between `bff-api`'s Nexus event-ingestion
-/// polls (PROMPT-30, ADR-011's "Nexus → BFF ingestion... via polling"
-/// decision). ADR-011 names "every 5 seconds" as the example interval; kept
-/// configurable via `EVENT_POLL_INTERVAL_SECONDS` (12-factor convention,
-/// matching every other tunable in this struct) rather than hardcoded, so
-/// it can be tightened/loosened per-environment without a code change once
-/// real polling latency/load data exists.
-const DEFAULT_EVENT_POLL_INTERVAL_SECONDS: u64 = 5;
 
 /// Application configuration, loaded once at startup from environment
 /// variables (falling back to dev defaults when a variable is unset).
@@ -94,15 +86,22 @@ pub struct Config {
     /// skipped rather than needing to fake one out. The container image
     /// (repo-root `Dockerfile`) sets `STATIC_DIR=/app/frontend-dist`.
     pub static_dir: Option<PathBuf>,
-    /// Interval, in seconds, between Nexus event-ingestion polls (PROMPT-30,
-    /// ADR-011). Sourced from `EVENT_POLL_INTERVAL_SECONDS`, defaulting to
-    /// [`DEFAULT_EVENT_POLL_INTERVAL_SECONDS`] when unset.
-    pub event_poll_interval_seconds: u64,
     /// Firebase project id used to verify Google Sign-In ID tokens
     /// (`auth::firebase`'s real `SessionProvider`). Sourced from
     /// `FIREBASE_PROJECT_ID`; unset (`None`) in dev, where the dev-stub
     /// provider is used instead and no real login exists to verify.
     pub firebase_project_id: Option<String>,
+    /// Expected caller identity (a Google service-account email) for
+    /// inbound `POST /api/reactions/:reaction_handler` calls (ADR-018) —
+    /// nexus-server's own runtime service account. Sourced from
+    /// `NEXUS_CALLER_SERVICE_ACCOUNT_EMAIL`; **unset (`None`) by default,
+    /// deliberately fail-closed**: `auth::google_identity_token`'s verifier
+    /// rejects every inbound reaction call when this is unset rather than
+    /// falling back to any default, since there is no dev-safe placeholder
+    /// for "which service is allowed to push events into this repo" the
+    /// way `DEFAULT_NEXUS_ENDPOINT_URL` has one for "where Nexus is" — an
+    /// unset expected caller must mean "reject all", never "accept all".
+    pub nexus_caller_service_account_email: Option<String>,
 }
 
 impl Config {
@@ -140,14 +139,8 @@ impl Config {
 
         let static_dir = get(STATIC_DIR_ENV).map(PathBuf::from);
 
-        let event_poll_interval_seconds = match get(EVENT_POLL_INTERVAL_SECONDS_ENV) {
-            Some(raw) => raw.parse::<u64>().unwrap_or_else(|err| {
-                panic!("{EVENT_POLL_INTERVAL_SECONDS_ENV} must be a valid u64, got {raw:?}: {err}")
-            }),
-            None => DEFAULT_EVENT_POLL_INTERVAL_SECONDS,
-        };
-
         let firebase_project_id = get(FIREBASE_PROJECT_ID_ENV);
+        let nexus_caller_service_account_email = get(NEXUS_CALLER_SERVICE_ACCOUNT_EMAIL_ENV);
 
         Config {
             database_url,
@@ -156,8 +149,8 @@ impl Config {
             nexus_endpoint_url,
             environment,
             static_dir,
-            event_poll_interval_seconds,
             firebase_project_id,
+            nexus_caller_service_account_email,
         }
     }
 
@@ -206,7 +199,10 @@ mod tests {
         assert_eq!(config.environment, DEFAULT_APP_ENV);
         assert!(config.is_dev());
         assert_eq!(config.static_dir, None);
-        assert_eq!(config.event_poll_interval_seconds, DEFAULT_EVENT_POLL_INTERVAL_SECONDS);
+        assert_eq!(
+            config.nexus_caller_service_account_email, None,
+            "must default to None (fail-closed) — see the field's own doc comment"
+        );
     }
 
     #[test]
@@ -218,7 +214,7 @@ mod tests {
             (NEXUS_ENDPOINT_URL_ENV, "https://nexus.example.com"),
             (APP_ENV_ENV, "prod"),
             (STATIC_DIR_ENV, "/app/frontend-dist"),
-            (EVENT_POLL_INTERVAL_SECONDS_ENV, "10"),
+            (NEXUS_CALLER_SERVICE_ACCOUNT_EMAIL_ENV, "nexus-runtime@example.iam.gserviceaccount.com"),
         ]);
 
         let config = Config::from_env(lookup(vars));
@@ -230,20 +226,16 @@ mod tests {
         assert_eq!(config.environment, "prod");
         assert!(!config.is_dev());
         assert_eq!(config.static_dir, Some(PathBuf::from("/app/frontend-dist")));
-        assert_eq!(config.event_poll_interval_seconds, 10);
+        assert_eq!(
+            config.nexus_caller_service_account_email,
+            Some("nexus-runtime@example.iam.gserviceaccount.com".to_owned())
+        );
     }
 
     #[test]
     #[should_panic(expected = "PORT must be a valid u16")]
     fn invalid_port_panics() {
         let vars = HashMap::from([(PORT_ENV, "not-a-number")]);
-        Config::from_env(lookup(vars));
-    }
-
-    #[test]
-    #[should_panic(expected = "EVENT_POLL_INTERVAL_SECONDS must be a valid u64")]
-    fn invalid_event_poll_interval_seconds_panics() {
-        let vars = HashMap::from([(EVENT_POLL_INTERVAL_SECONDS_ENV, "not-a-number")]);
         Config::from_env(lookup(vars));
     }
 
@@ -256,8 +248,8 @@ mod tests {
             nexus_endpoint_url: DEFAULT_NEXUS_ENDPOINT_URL.to_owned(),
             environment: DEFAULT_APP_ENV.to_owned(),
             static_dir: None,
-            event_poll_interval_seconds: DEFAULT_EVENT_POLL_INTERVAL_SECONDS,
             firebase_project_id: None,
+            nexus_caller_service_account_email: None,
         };
 
         assert_eq!(config.redacted_database_url(), "postgres://***@db.internal:5432/prod");
@@ -272,8 +264,8 @@ mod tests {
             nexus_endpoint_url: DEFAULT_NEXUS_ENDPOINT_URL.to_owned(),
             environment: DEFAULT_APP_ENV.to_owned(),
             static_dir: None,
-            event_poll_interval_seconds: DEFAULT_EVENT_POLL_INTERVAL_SECONDS,
             firebase_project_id: None,
+            nexus_caller_service_account_email: None,
         };
 
         assert_eq!(config.redacted_database_url(), DEFAULT_DATABASE_URL);

@@ -226,13 +226,35 @@ pub struct AppState {
     /// ADR-010). Same "not yet read by a handler, shared for PROMPT-31"
     /// rationale as [`Self::notification_repository`].
     pub action_queue_repository: Arc<dyn bff_core::ActionQueueRepository>,
-    /// In-process pub/sub bus (PROMPT-30, ADR-011) that
-    /// [`crate::event_ingestion::run_polling_loop`] publishes freshly-
-    /// ingested notifications/action-queue entries into. `Arc`-wrapped so
-    /// the same bus instance is shared between the background polling task
-    /// and (in PROMPT-31) every `GET /api/notifications/stream` SSE
-    /// handler's `subscribe()` call.
+    /// In-process pub/sub bus (PROMPT-30, ADR-011) every
+    /// `GET /api/notifications/stream` SSE handler's `subscribe()` call
+    /// reads from (PROMPT-31). Fed by `event_notify_bridge::run_listen_bridge`'s
+    /// Postgres `LISTEN` loop (PROMPT-32, ADR-014), not written into
+    /// directly by [`Self::event_notify_publisher`] — see that field's own
+    /// doc comment for the two-hop path.
     pub event_bus: Arc<bff_core::EventBus>,
+    /// Cross-instance event publisher (PROMPT-32, ADR-014) [`crate::reactions`]'s
+    /// handler (ADR-018) hands a freshly-ingested event to — a
+    /// `persistence::PgNotifyPublisher` in production, issuing a Postgres
+    /// `NOTIFY` so *every* `bff-api` instance's own listener bridge learns
+    /// about it (including this one, which receives its own event back
+    /// through the same NOTIFY/LISTEN round-trip every other instance
+    /// does), rather than writing straight into this instance's own
+    /// [`Self::event_bus`] and only reaching subscribers connected to this
+    /// one process.
+    pub event_notify_publisher: Arc<dyn bff_core::EventPublisher>,
+    /// Verifies the Google-signed identity token nexus-server presents on
+    /// every inbound `POST /api/reactions/:reaction_handler` call
+    /// (ADR-018). Always constructed (unlike
+    /// [`Self::firebase_session_provider`]'s dev/non-dev split) — when
+    /// `Config::nexus_caller_service_account_email` is unset, the verifier
+    /// itself fails closed on every call
+    /// (`GoogleIdentityTokenError::NoExpectedCallerConfigured`) rather than
+    /// this field being absent, so [`crate::reactions::receive_reaction`]
+    /// has one call path (`verify(...)`) to reach for both "not configured"
+    /// and "configured but this caller doesn't match", instead of an extra
+    /// `Option` layer on top.
+    pub google_identity_verifier: Arc<auth::google_identity_token::GoogleIdentityTokenVerifier>,
 }
 
 impl FromRef<AppState> for PrometheusHandle {

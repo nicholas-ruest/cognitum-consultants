@@ -15,13 +15,13 @@ mod notifications;
 mod notifications_sse;
 mod permissions;
 mod products;
+mod reactions;
 mod sales;
 mod session;
 mod telemetry;
 mod workflow_sessions;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::routing::{get, post};
 use axum::{middleware, Router};
@@ -345,39 +345,15 @@ async fn main() {
         persistence::PgNotifyPublisher::new(db_pool.clone(), bff_core::EVENT_NOTIFY_CHANNEL),
     );
 
-    // Events-poll transport (PROMPT-30, ADR-011): `api/v1/events/poll`
-    // (ADR-030 §3) is a read (idempotent query, no side effect), so per
-    // ADR-016 it gets the read-timeout budget wrapped in `RetryingTransport`,
-    // same convention as `armor_transport` above and `sales_query_transport`'s
-    // read-side counterpart.
-    let events_base_transport = nexus_client::ReqwestNexusTransport::new(&cfg.nexus_endpoint_url)
-        .unwrap_or_else(|err| panic!("invalid nexus_endpoint_url {:?}: {err}", cfg.nexus_endpoint_url));
-    let events_timeout_transport =
-        nexus_client::TimeoutTransport::new(Arc::new(events_base_transport), nexus_client::DEFAULT_READ_TIMEOUT);
-    let events_transport: Arc<dyn nexus_client::NexusTransport> =
-        Arc::new(nexus_client::RetryingTransport::with_default_retries(Arc::new(events_timeout_transport)));
-
-    // Background polling task (PROMPT-30, ADR-011's "Nexus → BFF ingestion
-    // via polling" decision) — **temporarily not spawned**. Verified live
-    // against the real deployed nexus-server: `GET api/v1/events/poll`
-    // (ADR-030 §3's assumed route) 404s, and nexus's own public
-    // `/openapi.json` confirms no consumer-facing poll route exists at all
-    // (only `POST /api/v1/events`, which is event *ingestion into* nexus,
-    // the opposite direction). The two candidate discovery routes
-    // (`/api/v1/repos/{repo_id}/contract`, `/api/v1/graph/repos`) both
-    // reject this service's real Cloud-Run-to-Cloud-Run identity token with
-    // `{"error":"invalid signature"}` — the same token-minting mechanism
-    // that already works for `POST /api/v1/capabilities/...` — implying
-    // they're gated for a different caller/audience than a repo's own
-    // runtime identity, not something resolvable from this side.
-    //
-    // Spawning this against a route that doesn't exist only wastes calls
-    // and spams logs every `event_poll_interval_seconds`, so it's disabled
-    // until ADR-030's real event-delivery contract is confirmed with
-    // whoever owns nexus-server. Notifications/action-queue entries created
-    // via this repo's own capability calls are unaffected — this loop only
-    // covers events nexus would otherwise push in.
-    let _ = (events_transport, event_notify_publisher);
+    // ADR-018: verifies the Google-signed identity token nexus-server
+    // presents on every inbound `POST /api/reactions/:reaction_handler`
+    // call — see `reactions` module docs and `config::Config::nexus_caller_service_account_email`'s
+    // own doc comment for why an unset expected caller fails closed rather
+    // than defaulting to anything.
+    let google_identity_verifier = Arc::new(auth::google_identity_token::GoogleIdentityTokenVerifier::new(
+        reactions::REACTION_TOKEN_AUDIENCE.to_owned(),
+        cfg.nexus_caller_service_account_email.clone(),
+    ));
 
     // PROMPT-32, ADR-014: the other half of the bridge — a dedicated
     // Postgres `LISTEN` connection that republishes every NOTIFY (from any
@@ -423,6 +399,8 @@ async fn main() {
         notification_repository,
         action_queue_repository,
         event_bus,
+        event_notify_publisher,
+        google_identity_verifier,
     };
 
     // `/api/login/dev` is dev-only in practice (see `session` module docs)
@@ -461,6 +439,13 @@ async fn main() {
     // and `POST /api/landscape/observations` (PROMPT-40). `legal::legal_router`
     // adds `GET /api/legal/clauses` (PROMPT-41) — see that module's docs for
     // the `proposal_id`/`topic` either/or query contract.
+    // `reactions::reactions_router` adds `POST /api/reactions/:reaction_handler`
+    // (ADR-018) — nexus's inbound push-delivery route, replacing the old
+    // never-working polling loop. Deliberately **not** behind
+    // `session::require_session` like every route above — see that
+    // module's docs for why (nexus is a peer service, not a browser with a
+    // session cookie; it authenticates via its own Google-signed identity
+    // token instead).
     let api_router = Router::new()
         .route("/login/dev", post(session::login_dev))
         .route("/login/firebase", post(session::login_firebase))
@@ -479,7 +464,8 @@ async fn main() {
         .merge(legal::legal_router(state.clone()))
         .merge(workflow_sessions::workflow_sessions_router(state.clone()))
         .merge(notifications_sse::notifications_router(state.clone()))
-        .merge(notifications::notifications_write_router(state.clone()));
+        .merge(notifications::notifications_write_router(state.clone()))
+        .merge(reactions::reactions_router(state.clone()));
 
     let mut app = Router::new()
         .route("/healthz", get(health::healthz))

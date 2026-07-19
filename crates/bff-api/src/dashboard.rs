@@ -451,8 +451,8 @@ mod tests {
             nexus_endpoint_url: "http://localhost:8080".to_owned(),
             environment: config::DEV_ENVIRONMENT.to_owned(),
             static_dir: None,
-            event_poll_interval_seconds: 5,
             firebase_project_id: None,
+                nexus_caller_service_account_email: None,
         }
     }
 
@@ -508,6 +508,11 @@ mod tests {
             notification_repository,
             action_queue_repository,
             event_bus: Arc::new(bff_core::EventBus::default()),
+            event_notify_publisher: Arc::new(bff_core::EventBus::default()),
+            google_identity_verifier: Arc::new(auth::google_identity_token::GoogleIdentityTokenVerifier::new(
+                "test-audience".to_owned(),
+                None,
+            )),
         };
 
         let router = Router::new().nest("/api", dashboard_router(state.clone())).with_state(state);

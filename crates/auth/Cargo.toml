@@ -40,3 +40,8 @@ firebase-auth = ["dep:jsonwebtoken", "dep:serde", "dep:reqwest", "dep:persistenc
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+# `google_identity_token`'s own test module parses a fixture of Google's
+# real `oauth2/v3/certs` JWKS response shape — a regression guard against
+# the exact bug that shape assumption already caused once (a `HashMap<kid,
+# pem>` flat-map assumption that silently rejected every genuine caller).
+serde_json = "1.0.150"

@@ -127,8 +127,8 @@ mod tests {
             nexus_endpoint_url: "http://localhost:8080".to_owned(),
             environment: config::DEV_ENVIRONMENT.to_owned(),
             static_dir: None,
-            event_poll_interval_seconds: 5,
             firebase_project_id: None,
+                nexus_caller_service_account_email: None,
         }
     }
 

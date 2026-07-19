@@ -18,6 +18,14 @@ pub mod dev_stub;
 #[cfg(feature = "firebase-auth")]
 pub mod firebase;
 
+/// Verifies inbound Google-signed identity tokens from other Cloud Run
+/// services (ADR-018) — reuses `firebase-auth`'s `jsonwebtoken`/`reqwest`
+/// dependencies (same RS256-against-Google's-public-certs shape as
+/// `firebase`, just a different cert source/audience), so it rides the same
+/// feature gate rather than introducing a new one for identical deps.
+#[cfg(feature = "firebase-auth")]
+pub mod google_identity_token;
+
 /// A BFF-managed server-side session (ADR-008): the browser holds only an
 /// opaque `session_id` (in an `HttpOnly`/`Secure`/`SameSite=Strict` cookie,
 /// set up by U11 — not this crate), which maps to this record identifying
