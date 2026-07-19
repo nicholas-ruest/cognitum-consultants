@@ -80,8 +80,27 @@ async function startPostgresContainer(): Promise<void> {
     POSTGRES_IMAGE,
   ])
 
+  // `pg_isready` alone is not a sufficient readiness signal here: the
+  // official postgres image runs a transient bootstrap instance for
+  // `initdb`, which `pg_isready` can report as "ready" for, then shuts
+  // down and restarts the real server -- a caller that proceeds straight
+  // to `psql` after `pg_isready` succeeds can race that restart and find
+  // no socket at all (observed in CI as "connection to server on socket
+  // ... failed: No such file or directory" on the very first migration).
+  // Requiring an actual query to succeed only passes once the real,
+  // final server instance is genuinely accepting connections.
   await waitFor('Postgres to accept connections', 60_000, async () => {
-    await execFileAsync('docker', ['exec', POSTGRES_CONTAINER_NAME, 'pg_isready', '-U', 'postgres'])
+    await execFileAsync('docker', [
+      'exec',
+      POSTGRES_CONTAINER_NAME,
+      'psql',
+      '-U',
+      'postgres',
+      '-d',
+      'postgres',
+      '-c',
+      'SELECT 1',
+    ])
     return true
   })
 }
