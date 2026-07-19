@@ -770,6 +770,7 @@ export function startMockNexusServer(port: number): Promise<MockNexusServer> {
       return
     }
 
+    console.error(`[mock-nexus] no route matched for ${method} ${url.pathname}`)
     sendJson(response, 404, { error: `mock nexus has no route for ${method} ${url.pathname}` })
   }
 
