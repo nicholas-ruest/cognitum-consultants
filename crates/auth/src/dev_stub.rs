@@ -91,6 +91,12 @@ impl SessionProvider for DevStubSessionProvider {
 
         Ok(sessions.get(&session_id).filter(|session| session.expires_at > Utc::now()).cloned())
     }
+
+    async fn delete_session(&self, session_id: Uuid) -> Result<(), SessionError> {
+        let mut sessions = lock_sessions(&self.sessions)?;
+        sessions.remove(&session_id);
+        Ok(())
+    }
 }
 
 fn lock_sessions(
@@ -122,6 +128,7 @@ mod tests {
             environment: config::DEV_ENVIRONMENT.to_owned(),
             static_dir: None,
             event_poll_interval_seconds: 5,
+            firebase_project_id: None,
         }
     }
 

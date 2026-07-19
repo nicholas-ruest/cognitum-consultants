@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SessionProvider, useSession } from '../lib/SessionContext'
 import { DashboardPage } from './DashboardPage'
@@ -49,6 +49,10 @@ function mockFetch(cards: MockCard[]) {
     // (covered by `ProposalWorkspace.test.tsx`).
     if (url === '/api/commit/proposals') {
       return { ok: true, status: 200, json: async () => [] }
+    }
+
+    if (url === '/api/logout') {
+      return { ok: true, status: 200, json: async () => ({ ok: true }) }
     }
 
     throw new Error(`unexpected fetch call: ${url}`)
@@ -127,5 +131,22 @@ describe('DashboardPage', () => {
     })
     expect(screen.getByText('You are logged in as consultant-1')).toBeInTheDocument()
     expect(screen.getByRole('navigation', { name: 'Primary' })).toBeInTheDocument()
+  })
+
+  it('POSTs to /api/logout when "Sign out" is clicked', async () => {
+    const fetchMock = mockFetch([])
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithProviders()
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/logout', expect.objectContaining({ method: 'POST' }))
+    })
   })
 })

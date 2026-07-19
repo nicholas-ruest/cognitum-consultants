@@ -23,7 +23,7 @@ function AppShell() {
   const session = useSession()
 
   if (session.status === 'loading') {
-    return <p className="p-4 text-sm text-gray-500">Loading…</p>
+    return <p className="p-4 text-sm text-muted-foreground">Loading…</p>
   }
 
   if (session.status === 'unauthenticated') {
@@ -32,7 +32,7 @@ function AppShell() {
 
   if (session.status === 'error') {
     return (
-      <p className="p-4 text-sm text-red-600">
+      <p className="p-4 text-sm text-[hsl(0_70%_70%)]">
         Something went wrong loading your session. Please refresh the page.
       </p>
     )
