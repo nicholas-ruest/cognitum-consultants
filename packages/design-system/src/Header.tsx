@@ -24,8 +24,8 @@ export interface HeaderProps {
 
 export function Header({ title, rightSlot }: HeaderProps) {
   return (
-    <header className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
-      <h1 className="text-lg font-semibold text-gray-900">{title}</h1>
+    <header className="flex items-center justify-between border-b border-border/50 px-4 py-3.5">
+      <h1 className="text-lg font-semibold tracking-tight text-foreground">{title}</h1>
       {rightSlot ? <div className="flex items-center gap-2">{rightSlot}</div> : null}
     </header>
   )

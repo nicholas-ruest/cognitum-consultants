@@ -15,6 +15,9 @@ use uuid::Uuid;
 #[cfg(feature = "dev-auth")]
 pub mod dev_stub;
 
+#[cfg(feature = "firebase-auth")]
+pub mod firebase;
+
 /// A BFF-managed server-side session (ADR-008): the browser holds only an
 /// opaque `session_id` (in an `HttpOnly`/`Secure`/`SameSite=Strict` cookie,
 /// set up by U11 — not this crate), which maps to this record identifying
@@ -66,4 +69,10 @@ pub trait SessionProvider: Send + Sync {
     /// callers decide how to treat expiry), or `Err` if the lookup itself
     /// failed.
     async fn get_session(&self, session_id: Uuid) -> Result<Option<Session>, SessionError>;
+
+    /// Invalidates `session_id` server-side (logout). A no-op (`Ok(())`),
+    /// not an error, if the id is already unknown/expired — logging out of
+    /// a session that's already gone is not a failure from the caller's
+    /// point of view.
+    async fn delete_session(&self, session_id: Uuid) -> Result<(), SessionError>;
 }

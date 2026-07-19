@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import type { PermissionAssertion } from '../lib/useSessionQuery'
+import type { CapabilityAssertion } from './Sidebar'
 import { navItemsFromAssertions, Sidebar } from './Sidebar'
 
-function assertion(capability: string): PermissionAssertion {
-  return { consultant_id: 'consultant-1', capability, scope: 'default', expires_at: '2099-01-01T00:00:00Z' }
+// A consuming app's own richer assertion type (e.g. frontend's
+// `PermissionAssertion` in `frontend/src/lib/useSessionQuery.ts`, which
+// also carries `consultant_id`/`scope`/`expires_at`) structurally satisfies
+// `CapabilityAssertion` too -- this helper only stands in for the minimal
+// shape this package actually reads.
+function assertion(capability: string): CapabilityAssertion {
+  return { capability }
 }
 
 describe('Sidebar', () => {

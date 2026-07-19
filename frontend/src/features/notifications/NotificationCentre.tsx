@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Alert } from '../../components/Alert'
-import { Button } from '../../components/Button'
+import { Alert, Button } from '@cognitum/design-system'
+import { ListDetailPanel } from '@cognitum/dashboard-components'
 import { notificationsQueryKey } from '../../lib/queryKeys'
 import { useSession } from '../../lib/SessionContext'
 import type { Notification } from '../../lib/useNotificationsQuery'
@@ -48,24 +48,26 @@ export function NotificationCentre() {
     },
   })
 
-  if (isPending) return <p className="text-sm text-gray-500">Loading notifications…</p>
+  if (isPending) return <p className="text-sm text-muted-foreground">Loading notifications…</p>
   if (isError) return <Alert variant="error">Failed to load notifications.</Alert>
 
   if (notifications.length === 0) {
-    return <p className="text-xs text-gray-500">No notifications.</p>
+    return <p className="text-xs text-muted-foreground">No notifications.</p>
   }
 
   return (
-    <ul className="flex flex-col gap-3">
-      {notifications.map((notification) => (
+    <ListDetailPanel
+      items={notifications}
+      getKey={(notification) => notification.id}
+      listClassName="flex flex-col gap-3"
+      renderRow={(notification) => (
         <NotificationRow
-          key={notification.id}
           notification={notification}
           onMarkRead={() => markReadMutation.mutate(notification.id)}
           isMarkingRead={markReadMutation.isPending && markReadMutation.variables === notification.id}
         />
-      ))}
-    </ul>
+      )}
+    />
   )
 }
 
@@ -79,14 +81,14 @@ function NotificationRow({ notification, onMarkRead, isMarkingRead }: Notificati
   const isRead = notification.read_state === 'read'
 
   return (
-    <li className="rounded border border-gray-200 p-3">
-      <p className="text-sm font-semibold text-gray-900">{notification.title}</p>
-      <p className="text-sm text-gray-700">{notification.body}</p>
+    <div className="rounded border border-border p-3">
+      <p className="text-sm font-semibold text-foreground">{notification.title}</p>
+      <p className="text-sm text-card-foreground">{notification.body}</p>
 
       {notification.deep_link !== null ? (
         <a
           href={notification.deep_link}
-          className="text-xs text-blue-600 hover:underline"
+          className="text-xs text-primary hover:underline"
           target="_blank"
           rel="noreferrer"
         >
@@ -96,13 +98,13 @@ function NotificationRow({ notification, onMarkRead, isMarkingRead }: Notificati
 
       <div className="mt-2">
         {isRead ? (
-          <span className="text-xs text-gray-500">Read</span>
+          <span className="text-xs text-muted-foreground">Read</span>
         ) : (
           <Button variant="secondary" disabled={isMarkingRead} onClick={onMarkRead}>
             {isMarkingRead ? 'Marking…' : 'Dismiss'}
           </Button>
         )}
       </div>
-    </li>
+    </div>
   )
 }

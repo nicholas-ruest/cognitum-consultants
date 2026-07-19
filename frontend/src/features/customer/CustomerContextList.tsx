@@ -1,6 +1,6 @@
-import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Alert } from '../../components/Alert'
+import { Alert } from '@cognitum/design-system'
+import { ListDetailPanel } from '@cognitum/dashboard-components'
 import { queryKeys } from '../../lib/queryKeys'
 import { useSession } from '../../lib/SessionContext'
 
@@ -48,20 +48,18 @@ async function fetchAssignedCustomers(): Promise<CustomerContextCard[]> {
  * own provisional vocabulary.
  */
 const HEALTH_BADGE_CLASSES: Record<string, string> = {
-  green: 'bg-green-100 text-green-800',
-  yellow: 'bg-yellow-100 text-yellow-800',
-  red: 'bg-red-100 text-red-800',
+  green: 'bg-accent/10 text-[hsl(142_70%_65%)]',
+  yellow: 'bg-warning/10 text-[hsl(35_85%_70%)]',
+  red: 'bg-destructive/10 text-[hsl(0_70%_70%)]',
 }
 
 function healthBadgeClass(healthStatus: string): string {
-  return HEALTH_BADGE_CLASSES[healthStatus.toLowerCase()] ?? 'bg-gray-100 text-gray-700'
+  return HEALTH_BADGE_CLASSES[healthStatus.toLowerCase()] ?? 'bg-secondary text-card-foreground'
 }
 
 export function CustomerContextList() {
   const session = useSession()
   const consultantId = session.status === 'authenticated' ? session.consultantId : undefined
-
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
 
   const contextsQuery = useQuery({
     queryKey: queryKeys.customer.assigned(consultantId ?? ''),
@@ -70,7 +68,7 @@ export function CustomerContextList() {
   })
 
   if (contextsQuery.isPending) {
-    return <p className="text-sm text-gray-500">Loading your assigned customers…</p>
+    return <p className="text-sm text-muted-foreground">Loading your assigned customers…</p>
   }
 
   if (contextsQuery.isError) {
@@ -78,35 +76,31 @@ export function CustomerContextList() {
   }
 
   const contexts = contextsQuery.data ?? []
-  const selectedContext = contexts.find((context) => context.customer_id === selectedCustomerId) ?? null
 
   if (contexts.length === 0) {
-    return <p className="text-xs text-gray-500">No assigned customers yet.</p>
+    return <p className="text-xs text-muted-foreground">No assigned customers yet.</p>
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <ul className="flex flex-col gap-2">
-        {contexts.map((context) => (
-          <li key={context.customer_id}>
-            <button
-              type="button"
-              onClick={() => setSelectedCustomerId(context.customer_id)}
-              className="w-full rounded border border-gray-200 p-3 text-left hover:bg-gray-50"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-gray-900">{context.name}</p>
-                <span className={`rounded px-2 py-0.5 text-xs ${healthBadgeClass(context.health_status)}`}>
-                  {context.health_status}
-                </span>
-              </div>
-            </button>
-          </li>
-        ))}
-      </ul>
-
-      {selectedContext ? <CustomerContextDetail context={selectedContext} /> : null}
-    </div>
+    <ListDetailPanel
+      items={contexts}
+      getKey={(context) => context.customer_id}
+      renderRow={(context, { select }) => (
+        <button
+          type="button"
+          onClick={select}
+          className="w-full rounded border border-border p-3 text-left hover:bg-secondary/60"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-foreground">{context.name}</p>
+            <span className={`rounded px-2 py-0.5 text-xs ${healthBadgeClass(context.health_status)}`}>
+              {context.health_status}
+            </span>
+          </div>
+        </button>
+      )}
+      renderDetail={(context) => <CustomerContextDetail context={context} />}
+    />
   )
 }
 
@@ -116,15 +110,15 @@ interface CustomerContextDetailProps {
 
 function CustomerContextDetail({ context }: CustomerContextDetailProps) {
   return (
-    <div className="rounded border border-gray-300 p-3">
-      <h4 className="text-sm font-semibold text-gray-900">{context.name}</h4>
-      <p className="text-xs text-gray-500">
+    <div>
+      <h4 className="text-sm font-semibold text-foreground">{context.name}</h4>
+      <p className="text-xs text-muted-foreground">
         Health: <span className={`rounded px-2 py-0.5 ${healthBadgeClass(context.health_status)}`}>{context.health_status}</span>
       </p>
-      <p className="mt-1 text-xs text-gray-700">{context.relationship_summary}</p>
+      <p className="mt-1 text-xs text-card-foreground">{context.relationship_summary}</p>
 
       {context.deep_link !== null ? (
-        <a href={context.deep_link} className="text-xs text-blue-600 hover:underline" target="_blank" rel="noreferrer">
+        <a href={context.deep_link} className="text-xs text-primary hover:underline" target="_blank" rel="noreferrer">
           Open in Customer
         </a>
       ) : null}

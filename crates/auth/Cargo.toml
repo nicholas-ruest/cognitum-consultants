@@ -21,8 +21,22 @@ thiserror = "2.0.18"
 # `dev-auth` is enabled.
 config = { path = "../config", optional = true }
 
+# Real, Firebase-backed login (Google Sign-In): verifies the ID token's
+# RS256 signature against Google's public certs and checks the resulting
+# email against the `approved_consultants` allowlist (persistence). Kept
+# behind the `firebase-auth` feature, same "base auth crate has no extra
+# deps unless a concrete provider is enabled" convention as `dev-auth`.
+jsonwebtoken = { version = "9", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+persistence = { path = "../persistence", optional = true }
+sqlx = { version = "0.9.0", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls", "uuid", "chrono"], optional = true }
+tokio = { version = "1.53.0", features = ["sync"], optional = true }
+tracing = { version = "0.1.44", optional = true }
+
 [features]
 dev-auth = ["dep:config"]
+firebase-auth = ["dep:jsonwebtoken", "dep:serde", "dep:reqwest", "dep:persistence", "dep:sqlx", "dep:tokio", "dep:tracing"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

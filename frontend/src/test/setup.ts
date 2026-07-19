@@ -1,6 +1,23 @@
 import '@testing-library/jest-dom/vitest'
-import { afterEach } from 'vitest'
+import { afterEach, vi } from 'vitest'
 import { cleanup } from '@testing-library/react'
+
+/**
+ * Real login (`LoginPage.tsx`) initializes the Firebase JS SDK at module
+ * import time (`../lib/firebase.ts`'s `initializeApp`/`getAuth`), using
+ * `VITE_FIREBASE_*` env vars that are unset in this test harness — any
+ * test that renders `LoginPage` (directly, or transitively via `App`'s
+ * unauthenticated branch) would otherwise fail on a real SDK call.
+ * Stubbed harness-wide, same "belongs in setup, not per-test-file"
+ * rationale as the `EventSource` double below. Tests that need to control
+ * `signInWithPopup`'s resolved/rejected value mock `firebase/auth`
+ * themselves (see `LoginPage.test.tsx`) — this only stubs the app/auth
+ * *instances* `../lib/firebase` exports, not sign-in behavior.
+ */
+vi.mock('../lib/firebase', () => ({
+  firebaseAuth: {},
+  googleAuthProvider: {},
+}))
 
 // ADR-013 layer 4: Vitest + React Testing Library harness setup.
 // Registers jest-dom matchers and unmounts rendered components after each test.

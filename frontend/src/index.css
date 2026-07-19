@@ -1,1 +1,65 @@
 @import "tailwindcss";
+
+/* Tailwind v4's automatic content detection is rooted at this Vite
+   project (frontend/) and does not reach sibling workspace packages —
+   and node_modules (where npm workspaces symlinks them) is always
+   excluded from detection regardless. Both design-system packages
+   (PROMPT-42/ADR-017) live outside this tree, so their class usage must
+   be scanned explicitly. */
+@source "../../packages/design-system/src";
+@source "../../packages/dashboard-components/src";
+
+/* Cognitum One design system tokens — mirrors the shared chrome tokens
+   used across the rest of the Cognitum One stack (COGS_UI_Template's
+   v0-chrome.css), so this app reads as one product family rather than a
+   one-off. Colors are HSL functions so Tailwind's `--color-*` theme
+   namespace can generate `bg-primary`, `text-foreground`, `border-border`,
+   etc. (including their `/opacity` modifiers) directly. */
+@theme {
+  --color-background: hsl(220 25% 6%);
+  --color-foreground: hsl(210 20% 92%);
+  --color-card: hsl(220 20% 10%);
+  --color-card-foreground: hsl(210 20% 92%);
+  --color-popover: hsl(220 20% 10%);
+  --color-popover-foreground: hsl(210 20% 92%);
+  --color-primary: hsl(185 80% 50%);
+  --color-primary-foreground: hsl(220 25% 6%);
+  --color-secondary: hsl(220 20% 14%);
+  --color-secondary-foreground: hsl(210 20% 80%);
+  --color-accent: hsl(142 70% 50%);
+  --color-accent-foreground: hsl(220 25% 6%);
+  --color-muted: hsl(220 15% 15%);
+  --color-muted-foreground: hsl(215 15% 55%);
+  --color-destructive: hsl(0 65% 50%);
+  --color-destructive-foreground: hsl(210 20% 92%);
+  --color-warning: hsl(35 85% 55%);
+  --color-warning-foreground: hsl(220 25% 6%);
+  --color-border: hsl(220 15% 18%);
+  --color-input: hsl(220 15% 18%);
+  --color-ring: hsl(185 80% 50%);
+
+  --shadow-card: 0 8px 32px -8px hsl(220 25% 2% / 0.8);
+
+  --font-sans: 'Outfit', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+}
+
+:root {
+  --gradient-card: linear-gradient(180deg, hsl(220 20% 12%) 0%, hsl(220 20% 8%) 100%);
+  --gradient-glow: radial-gradient(ellipse at center, hsl(185 80% 50% / 0.15) 0%, transparent 70%);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}

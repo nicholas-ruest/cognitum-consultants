@@ -69,8 +69,34 @@ async fn main() {
     // once here — this is where `Config` gets passed to
     // `DevStubSessionProvider::new`, per PROMPT-11 — and shared via
     // `AppState`.
-    let dev_session_provider = Arc::new(auth::dev_stub::DevStubSessionProvider::new(&cfg));
-    let session_provider: Arc<dyn auth::SessionProvider> = dev_session_provider.clone();
+    // In dev, the in-memory dev-stub is the only provider (real login has
+    // no credential to check anyway, per ADR-008). Outside dev,
+    // `DevStubSessionProvider::new` panics if constructed at all, so the
+    // real, Firebase-backed provider (`auth::firebase`) is used instead —
+    // it persists sessions in Postgres (`db_pool`) rather than in-memory,
+    // since a Cloud Run instance can scale to zero between requests.
+    // The explicit tuple type is required (not just clarity) -- `session_provider`
+    // must unify to the `Arc<dyn SessionProvider>` trait object across both
+    // branches below, which needs a type hint since each branch's concrete
+    // provider type differs. `#[allow]` rather than factoring into named
+    // type aliases: this is the only call site, so an alias would just add
+    // a layer of indirection for a tuple destructured three lines down.
+    #[allow(clippy::type_complexity)]
+    let (dev_session_provider, firebase_session_provider, session_provider): (
+        Option<Arc<auth::dev_stub::DevStubSessionProvider>>,
+        Option<Arc<auth::firebase::FirebaseSessionProvider>>,
+        Arc<dyn auth::SessionProvider>,
+    ) = if cfg.is_dev() {
+        let dev_provider = Arc::new(auth::dev_stub::DevStubSessionProvider::new(&cfg));
+        (Some(dev_provider.clone()), None, dev_provider)
+    } else {
+        let project_id = cfg
+            .firebase_project_id
+            .clone()
+            .unwrap_or_else(|| panic!("FIREBASE_PROJECT_ID must be set outside a dev environment"));
+        let firebase_provider = Arc::new(auth::firebase::FirebaseSessionProvider::new(db_pool.clone(), project_id));
+        (None, Some(firebase_provider.clone()), firebase_provider)
+    };
 
     // ADR-009/PROMPT-15's Armor ACL gateway, assembled per PROMPT-14's
     // read-call convention (nexus_client::armor module docs):
@@ -364,6 +390,7 @@ async fn main() {
         db_pool,
         session_provider,
         dev_session_provider,
+        firebase_session_provider,
         // ADR-008: `Secure` in non-local environments. The dev-stub only
         // ever runs with `cfg.is_dev() == true` (it panics otherwise), so
         // this is `false` in practice today — implemented config-driven
@@ -430,6 +457,8 @@ async fn main() {
     // the `proposal_id`/`topic` either/or query contract.
     let api_router = Router::new()
         .route("/login/dev", post(session::login_dev))
+        .route("/login/firebase", post(session::login_firebase))
+        .route("/logout", post(session::logout))
         .merge(session::protected_router(state.clone()))
         .merge(permissions::diagnostic_router(state.clone()))
         .merge(dashboard::dashboard_router(state.clone()))

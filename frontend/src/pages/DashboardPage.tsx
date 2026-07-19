@@ -1,8 +1,5 @@
-import { Card } from '../components/Card'
-import { CardGrid } from '../components/CardGrid'
-import { Header } from '../components/Header'
-import { Layout } from '../components/Layout'
-import { navItemsFromAssertions, Sidebar } from '../components/Sidebar'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Button, Card, CardGrid, Header, Layout, navItemsFromAssertions, Sidebar } from '@cognitum/design-system'
 import { ProfileEditForm } from '../features/capacity/ProfileEditForm'
 import { ProposalWorkspace } from '../features/commit/ProposalWorkspace'
 import { CustomerContextList } from '../features/customer/CustomerContextList'
@@ -68,56 +65,108 @@ export function DashboardPage({ session }: DashboardPageProps) {
   const { data, isPending, isError } = useDashboardQuery()
   const cards = data?.cards ?? []
 
+  const queryClient = useQueryClient()
+  const logoutMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch('/api/logout', { method: 'POST', credentials: 'include' })
+      if (!response.ok) {
+        throw new Error(`POST /api/logout failed: ${response.status}`)
+      }
+    },
+    onSuccess: () => {
+      // Same bare `['session']` key `useSessionQuery` reads -- invalidating
+      // it refetches `GET /api/session`, which now 401s against the
+      // server-invalidated session, flipping `useSession()` back to
+      // `'unauthenticated'` and swapping this page for `LoginPage`.
+      void queryClient.invalidateQueries({ queryKey: ['session'] })
+    },
+  })
+
   return (
     <Layout sidebar={<Sidebar items={navItemsFromAssertions(session.permissionAssertions)} />}>
       <Header
         title="Cognitum Consultants"
-        rightSlot={<span className="text-sm text-gray-600">{session.consultantId}</span>}
-      />
-      <p className="p-4 text-sm text-gray-700">You are logged in as {session.consultantId}</p>
-
-      <div className="p-4">
-        <CardGrid>
-          <Card title="Notifications">
-            <NotificationCentre />
-          </Card>
-          <Card title="Action Queue">
-            <ActionQueue />
-          </Card>
-        </CardGrid>
-
-        {isPending ? <p className="mt-4 text-sm text-gray-500">Loading dashboard…</p> : null}
-        {isError ? <p className="mt-4 text-sm text-red-600">Failed to load your dashboard.</p> : null}
-
-        {!isPending && !isError ? (
-          <div className="mt-4">
-            <CardGrid>
-              {cards.map((card) => (
-                <Card key={card.module_id} title={capitalize(card.module_id)}>
-                  {card.module_id === 'sales' ? (
-                    <LeadConflictCheck />
-                  ) : card.module_id === 'commit' ? (
-                    <ProposalWorkspace />
-                  ) : card.module_id === 'edu' ? (
-                    <LearningDashboard />
-                  ) : card.module_id === 'capacity' ? (
-                    <ProfileEditForm />
-                  ) : card.module_id === 'customer' ? (
-                    <CustomerContextList />
-                  ) : card.module_id === 'execution' ? (
-                    <ExecutionWorkspace />
-                  ) : card.module_id === 'products' ? (
-                    <ProductCatalog />
-                  ) : card.module_id === 'landscape' ? (
-                    <LandscapeWorkspace />
-                  ) : (
-                    <p className="text-xs text-gray-500">no live data yet</p>
-                  )}
-                </Card>
-              ))}
-            </CardGrid>
+        rightSlot={
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted-foreground">{session.consultantId}</span>
+            <Button
+              variant="secondary"
+              className="h-8 px-3 text-xs"
+              disabled={logoutMutation.isPending}
+              onClick={() => logoutMutation.mutate()}
+            >
+              {logoutMutation.isPending ? 'Signing out…' : 'Sign out'}
+            </Button>
           </div>
-        ) : null}
+        }
+      />
+      <p className="border-b border-border/50 px-4 py-3 text-sm text-muted-foreground">
+        You are logged in as {session.consultantId}
+      </p>
+
+      <div className="mx-auto max-w-[1400px] p-4">
+        <section className="mb-8">
+          <h2 className="mb-3 text-[0.6875rem] font-semibold uppercase tracking-widest text-muted-foreground">
+            Overview
+          </h2>
+          <CardGrid>
+            <Card title="Notifications">
+              <NotificationCentre />
+            </Card>
+            <Card title="Action Queue">
+              <ActionQueue />
+            </Card>
+          </CardGrid>
+        </section>
+
+        <section>
+          <h2 className="mb-3 text-[0.6875rem] font-semibold uppercase tracking-widest text-muted-foreground">
+            Your Modules
+          </h2>
+
+          {isPending ? <p className="text-sm text-muted-foreground">Loading dashboard…</p> : null}
+          {isError ? <p className="text-sm text-[hsl(0_70%_70%)]">Failed to load your dashboard.</p> : null}
+
+          {!isPending && !isError ? (
+            cards.length > 0 ? (
+              <CardGrid>
+                {cards.map((card) => (
+                  <Card key={card.module_id} title={capitalize(card.module_id)}>
+                    {card.module_id === 'sales' ? (
+                      <LeadConflictCheck />
+                    ) : card.module_id === 'commit' ? (
+                      <ProposalWorkspace />
+                    ) : card.module_id === 'edu' ? (
+                      <LearningDashboard />
+                    ) : card.module_id === 'capacity' ? (
+                      <ProfileEditForm />
+                    ) : card.module_id === 'customer' ? (
+                      <CustomerContextList />
+                    ) : card.module_id === 'execution' ? (
+                      <ExecutionWorkspace />
+                    ) : card.module_id === 'products' ? (
+                      <ProductCatalog />
+                    ) : card.module_id === 'landscape' ? (
+                      <LandscapeWorkspace />
+                    ) : (
+                      <p className="text-xs text-muted-foreground">no live data yet</p>
+                    )}
+                  </Card>
+                ))}
+              </CardGrid>
+            ) : (
+              <div className="rounded-xl border border-dashed border-border bg-[image:var(--gradient-card)] p-8 text-center">
+                <h3 className="mb-2 text-base font-semibold tracking-tight text-primary">
+                  No modules assigned yet
+                </h3>
+                <p className="mx-auto max-w-md text-sm leading-relaxed text-muted-foreground">
+                  Nexus hasn't granted this consultant access to any capability module. Once Armor
+                  assigns permissions, the modules you're permitted to use will appear here.
+                </p>
+              </div>
+            )
+          ) : null}
+        </section>
       </div>
     </Layout>
   )

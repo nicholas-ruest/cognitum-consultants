@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Alert } from '../../components/Alert'
-import { Button } from '../../components/Button'
-import { TextInput } from '../../components/TextInput'
+import { Alert, TextInput } from '@cognitum/design-system'
+import { CapabilityForm, ListDetailPanel } from '@cognitum/dashboard-components'
 import { queryKeys } from '../../lib/queryKeys'
 import { useSession } from '../../lib/SessionContext'
 
@@ -95,7 +94,7 @@ function IntelligenceDigestCard() {
   })
 
   if (digestQuery.isPending) {
-    return <p className="text-sm text-gray-500">Loading the intelligence digest…</p>
+    return <p className="text-sm text-muted-foreground">Loading the intelligence digest…</p>
   }
 
   if (digestQuery.isError) {
@@ -106,28 +105,31 @@ function IntelligenceDigestCard() {
 
   return (
     <section>
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Intelligence Digest</h4>
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Intelligence Digest</h4>
       {items.length === 0 ? (
-        <p className="text-xs text-gray-500">No approved intelligence items yet.</p>
+        <p className="text-xs text-muted-foreground">No approved intelligence items yet.</p>
       ) : (
-        <ul className="mt-1 flex flex-col gap-2">
-          {items.map((item) => (
-            <li key={item.intel_id} className="rounded border border-gray-200 p-3">
+        <ListDetailPanel
+          items={items}
+          getKey={(item) => item.intel_id}
+          listClassName="mt-1 flex flex-col gap-2"
+          renderRow={(item) => (
+            <div className="rounded border border-border p-3">
               <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-gray-900">{item.topic}</p>
-                <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700">
+                <p className="text-sm font-semibold text-foreground">{item.topic}</p>
+                <span className="rounded bg-secondary px-2 py-0.5 text-xs text-card-foreground">
                   {new Date(item.published_at).toLocaleDateString()}
                 </span>
               </div>
-              <p className="mt-1 text-xs text-gray-700">{item.summary}</p>
+              <p className="mt-1 text-xs text-card-foreground">{item.summary}</p>
               {item.deep_link !== null ? (
-                <a href={item.deep_link} className="text-xs text-blue-600 hover:underline" target="_blank" rel="noreferrer">
+                <a href={item.deep_link} className="text-xs text-primary hover:underline" target="_blank" rel="noreferrer">
                   Open in Landscape
                 </a>
               ) : null}
-            </li>
-          ))}
-        </ul>
+            </div>
+          )}
+        />
       )}
     </section>
   )
@@ -161,16 +163,26 @@ function ObservationSubmissionForm() {
     }
   }
 
+  const alerts = [
+    ...(submitMutation.isSuccess ? [{ variant: 'info' as const, message: 'Observation submitted.' }] : []),
+    ...(submitMutation.isError
+      ? [{ variant: 'error' as const, message: 'Failed to submit your observation. Please try again.' }]
+      : []),
+  ]
+
   return (
     <section>
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Submit a Field Observation</h4>
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Submit a Field Observation</h4>
 
-      {submitMutation.isSuccess ? <Alert variant="info">Observation submitted.</Alert> : null}
-      {submitMutation.isError ? (
-        <Alert variant="error">Failed to submit your observation. Please try again.</Alert>
-      ) : null}
-
-      <form onSubmit={handleSubmit} className="mt-2 flex flex-col gap-3">
+      <CapabilityForm
+        alerts={alerts}
+        onSubmit={handleSubmit}
+        submitLabel="Submit Observation"
+        pendingLabel="Submitting…"
+        isPending={submitMutation.isPending}
+        isSubmitDisabled={fields.observationText.trim().length === 0}
+        className="mt-2 flex flex-col gap-3"
+      >
         <TextInput
           label="Observation"
           value={fields.observationText}
@@ -182,10 +194,7 @@ function ObservationSubmissionForm() {
           value={fields.relatedCompanyReference}
           onChange={handleFieldChange('relatedCompanyReference')}
         />
-        <Button type="submit" disabled={submitMutation.isPending || fields.observationText.trim().length === 0}>
-          {submitMutation.isPending ? 'Submitting…' : 'Submit Observation'}
-        </Button>
-      </form>
+      </CapabilityForm>
     </section>
   )
 }

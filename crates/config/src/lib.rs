@@ -22,6 +22,7 @@ const NEXUS_ENDPOINT_URL_ENV: &str = "NEXUS_ENDPOINT_URL";
 const APP_ENV_ENV: &str = "APP_ENV";
 const STATIC_DIR_ENV: &str = "STATIC_DIR";
 const EVENT_POLL_INTERVAL_SECONDS_ENV: &str = "EVENT_POLL_INTERVAL_SECONDS";
+const FIREBASE_PROJECT_ID_ENV: &str = "FIREBASE_PROJECT_ID";
 
 const DEFAULT_DATABASE_URL: &str = "postgres://localhost:5432/cognitum_consultants";
 const DEFAULT_PORT: u16 = 3000;
@@ -97,6 +98,11 @@ pub struct Config {
     /// ADR-011). Sourced from `EVENT_POLL_INTERVAL_SECONDS`, defaulting to
     /// [`DEFAULT_EVENT_POLL_INTERVAL_SECONDS`] when unset.
     pub event_poll_interval_seconds: u64,
+    /// Firebase project id used to verify Google Sign-In ID tokens
+    /// (`auth::firebase`'s real `SessionProvider`). Sourced from
+    /// `FIREBASE_PROJECT_ID`; unset (`None`) in dev, where the dev-stub
+    /// provider is used instead and no real login exists to verify.
+    pub firebase_project_id: Option<String>,
 }
 
 impl Config {
@@ -141,6 +147,8 @@ impl Config {
             None => DEFAULT_EVENT_POLL_INTERVAL_SECONDS,
         };
 
+        let firebase_project_id = get(FIREBASE_PROJECT_ID_ENV);
+
         Config {
             database_url,
             port,
@@ -149,6 +157,7 @@ impl Config {
             environment,
             static_dir,
             event_poll_interval_seconds,
+            firebase_project_id,
         }
     }
 
@@ -248,6 +257,7 @@ mod tests {
             environment: DEFAULT_APP_ENV.to_owned(),
             static_dir: None,
             event_poll_interval_seconds: DEFAULT_EVENT_POLL_INTERVAL_SECONDS,
+            firebase_project_id: None,
         };
 
         assert_eq!(config.redacted_database_url(), "postgres://***@db.internal:5432/prod");
@@ -263,6 +273,7 @@ mod tests {
             environment: DEFAULT_APP_ENV.to_owned(),
             static_dir: None,
             event_poll_interval_seconds: DEFAULT_EVENT_POLL_INTERVAL_SECONDS,
+            firebase_project_id: None,
         };
 
         assert_eq!(config.redacted_database_url(), DEFAULT_DATABASE_URL);

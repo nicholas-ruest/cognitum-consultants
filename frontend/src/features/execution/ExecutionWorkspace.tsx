@@ -1,7 +1,6 @@
-import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert } from '../../components/Alert'
-import { Button } from '../../components/Button'
+import { Alert, Button } from '@cognitum/design-system'
+import { ListDetailPanel } from '@cognitum/dashboard-components'
 import { queryKeys } from '../../lib/queryKeys'
 import { useSession } from '../../lib/SessionContext'
 
@@ -78,20 +77,19 @@ async function requestTaskCompletion(taskId: string): Promise<void> {
  * provisional vocabulary.
  */
 const DELIVERY_STATUS_BADGE_CLASSES: Record<string, string> = {
-  on_track: 'bg-green-100 text-green-800',
-  at_risk: 'bg-yellow-100 text-yellow-800',
-  delayed: 'bg-red-100 text-red-800',
+  on_track: 'bg-accent/10 text-[hsl(142_70%_65%)]',
+  at_risk: 'bg-warning/10 text-[hsl(35_85%_70%)]',
+  delayed: 'bg-destructive/10 text-[hsl(0_70%_70%)]',
 }
 
 function deliveryStatusBadgeClass(deliveryStatus: string): string {
-  return DELIVERY_STATUS_BADGE_CLASSES[deliveryStatus.toLowerCase()] ?? 'bg-gray-100 text-gray-700'
+  return DELIVERY_STATUS_BADGE_CLASSES[deliveryStatus.toLowerCase()] ?? 'bg-secondary text-card-foreground'
 }
 
 export function ExecutionWorkspace() {
   const session = useSession()
   const consultantId = session.status === 'authenticated' ? session.consultantId : undefined
 
-  const [selectedEngagementId, setSelectedEngagementId] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
   const engagementsQuery = useQuery({
@@ -115,7 +113,7 @@ export function ExecutionWorkspace() {
   })
 
   if (engagementsQuery.isPending) {
-    return <p className="text-sm text-gray-500">Loading your delivery workspace…</p>
+    return <p className="text-sm text-muted-foreground">Loading your delivery workspace…</p>
   }
 
   if (engagementsQuery.isError) {
@@ -123,10 +121,9 @@ export function ExecutionWorkspace() {
   }
 
   const engagements = engagementsQuery.data ?? []
-  const selectedEngagement = engagements.find((engagement) => engagement.engagement_id === selectedEngagementId) ?? null
 
   if (engagements.length === 0) {
-    return <p className="text-xs text-gray-500">No assigned engagements yet.</p>
+    return <p className="text-xs text-muted-foreground">No assigned engagements yet.</p>
   }
 
   return (
@@ -135,33 +132,32 @@ export function ExecutionWorkspace() {
         <Alert variant="error">Failed to request task completion. Please try again.</Alert>
       ) : null}
 
-      <ul className="flex flex-col gap-2">
-        {engagements.map((engagement) => (
-          <li key={engagement.engagement_id}>
-            <button
-              type="button"
-              onClick={() => setSelectedEngagementId(engagement.engagement_id)}
-              className="w-full rounded border border-gray-200 p-3 text-left hover:bg-gray-50"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-gray-900">{engagement.engagement_id}</p>
-                <span className={`rounded px-2 py-0.5 text-xs ${deliveryStatusBadgeClass(engagement.delivery_status)}`}>
-                  {engagement.delivery_status}
-                </span>
-              </div>
-            </button>
-          </li>
-        ))}
-      </ul>
-
-      {selectedEngagement ? (
-        <EngagementDetail
-          engagement={selectedEngagement}
-          onRequestCompletion={(taskId) => completionMutation.mutate(taskId)}
-          isRequestingCompletion={completionMutation.isPending}
-          requestingTaskId={completionMutation.isPending ? completionMutation.variables : undefined}
-        />
-      ) : null}
+      <ListDetailPanel
+        items={engagements}
+        getKey={(engagement) => engagement.engagement_id}
+        renderRow={(engagement, { select }) => (
+          <button
+            type="button"
+            onClick={select}
+            className="w-full rounded border border-border p-3 text-left hover:bg-secondary/60"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-foreground">{engagement.engagement_id}</p>
+              <span className={`rounded px-2 py-0.5 text-xs ${deliveryStatusBadgeClass(engagement.delivery_status)}`}>
+                {engagement.delivery_status}
+              </span>
+            </div>
+          </button>
+        )}
+        renderDetail={(engagement) => (
+          <EngagementDetail
+            engagement={engagement}
+            onRequestCompletion={(taskId) => completionMutation.mutate(taskId)}
+            isRequestingCompletion={completionMutation.isPending}
+            requestingTaskId={completionMutation.isPending ? completionMutation.variables : undefined}
+          />
+        )}
+      />
     </div>
   )
 }
@@ -175,9 +171,9 @@ interface EngagementDetailProps {
 
 function EngagementDetail({ engagement, onRequestCompletion, isRequestingCompletion, requestingTaskId }: EngagementDetailProps) {
   return (
-    <div className="rounded border border-gray-300 p-3">
-      <h4 className="text-sm font-semibold text-gray-900">{engagement.engagement_id}</h4>
-      <p className="text-xs text-gray-500">
+    <div>
+      <h4 className="text-sm font-semibold text-foreground">{engagement.engagement_id}</h4>
+      <p className="text-xs text-muted-foreground">
         Delivery status:{' '}
         <span className={`rounded px-2 py-0.5 ${deliveryStatusBadgeClass(engagement.delivery_status)}`}>
           {engagement.delivery_status}
@@ -185,7 +181,7 @@ function EngagementDetail({ engagement, onRequestCompletion, isRequestingComplet
       </p>
 
       {engagement.deep_link !== null ? (
-        <a href={engagement.deep_link} className="text-xs text-blue-600 hover:underline" target="_blank" rel="noreferrer">
+        <a href={engagement.deep_link} className="text-xs text-primary hover:underline" target="_blank" rel="noreferrer">
           Open in Execution
         </a>
       ) : null}
@@ -193,16 +189,16 @@ function EngagementDetail({ engagement, onRequestCompletion, isRequestingComplet
       <WorkstreamsAndMilestones engagement={engagement} />
 
       <div className="mt-2">
-        <h5 className="text-xs font-semibold text-gray-700">Tasks</h5>
+        <h5 className="text-xs font-semibold text-card-foreground">Tasks</h5>
         {engagement.tasks.length === 0 ? (
-          <p className="text-xs text-gray-500">No tasks assigned.</p>
+          <p className="text-xs text-muted-foreground">No tasks assigned.</p>
         ) : (
           <ul className="mt-1 flex flex-col gap-2">
             {engagement.tasks.map((task) => (
-              <li key={task.task_id} className="flex items-center justify-between gap-2 rounded border border-gray-100 p-2">
+              <li key={task.task_id} className="flex items-center justify-between gap-2 rounded border border-border/50 p-2">
                 <div>
-                  <p className="text-xs font-medium text-gray-900">{task.title}</p>
-                  <p className="text-xs text-gray-500">Status: {task.status}</p>
+                  <p className="text-xs font-medium text-foreground">{task.title}</p>
+                  <p className="text-xs text-muted-foreground">Status: {task.status}</p>
                 </div>
                 {/* Requests completion through the BFF back to Execution — see
                     `requestTaskCompletion`'s doc comment: this never marks
@@ -229,11 +225,11 @@ function WorkstreamsAndMilestones({ engagement }: { engagement: EngagementSnapsh
   return (
     <div className="mt-2 flex flex-col gap-2">
       <div>
-        <h5 className="text-xs font-semibold text-gray-700">Workstreams</h5>
+        <h5 className="text-xs font-semibold text-card-foreground">Workstreams</h5>
         {engagement.workstreams.length === 0 ? (
-          <p className="text-xs text-gray-500">None.</p>
+          <p className="text-xs text-muted-foreground">None.</p>
         ) : (
-          <ul className="list-inside list-disc text-xs text-gray-700">
+          <ul className="list-inside list-disc text-xs text-card-foreground">
             {engagement.workstreams.map((workstream) => (
               <li key={workstream}>{workstream}</li>
             ))}
@@ -242,11 +238,11 @@ function WorkstreamsAndMilestones({ engagement }: { engagement: EngagementSnapsh
       </div>
 
       <div>
-        <h5 className="text-xs font-semibold text-gray-700">Milestones</h5>
+        <h5 className="text-xs font-semibold text-card-foreground">Milestones</h5>
         {engagement.milestones.length === 0 ? (
-          <p className="text-xs text-gray-500">None.</p>
+          <p className="text-xs text-muted-foreground">None.</p>
         ) : (
-          <ul className="list-inside list-disc text-xs text-gray-700">
+          <ul className="list-inside list-disc text-xs text-card-foreground">
             {engagement.milestones.map((milestone) => (
               <li key={milestone}>{milestone}</li>
             ))}

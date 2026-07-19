@@ -1,40 +1,48 @@
-import type { FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Alert } from '../components/Alert'
-import { Button } from '../components/Button'
-import { Card } from '../components/Card'
-import { TextInput } from '../components/TextInput'
+import { signInWithPopup } from 'firebase/auth'
+import { Alert, Button, Card } from '@cognitum/design-system'
+import { firebaseAuth, googleAuthProvider } from '../lib/firebase'
 
 /**
- * PROMPT-18 login page.
+ * PROMPT-18 login page, restyled to match the rest of the Cognitum One
+ * stack's shared sign-in look (badge / gradient wordmark / confidential
+ * pill / single CTA composition).
  *
- * Naming resolution: the prompt text (and PROMPT-18's own header in
- * `.plans/implementation-prompts.md`) says POST to `/api/login`, but the
- * BFF route that actually exists (PROMPT-11, `crates/bff-api/src/session.rs`)
- * is `POST /api/login/dev` — deliberately named to flag it as the dev-stub,
- * not a real login flow (ADR-008 "Interim dev-stub"). This page posts to the
- * real route rather than adding a redundant `/api/login` alias in the BFF.
+ * Real login: Google Sign-In via Firebase. `signInWithPopup` proves the
+ * consultant's Google identity; the BFF (`POST /api/login/firebase`,
+ * `crates/auth/src/firebase.rs`) independently verifies the resulting ID
+ * token's signature and checks its email against the
+ * `approved_consultants` allowlist before issuing a session — signing in
+ * with Google here is proof of identity, not proof of authorization.
  *
- * The dev-stub takes no request body and always logs in as the fixed
- * `dev-consultant-001` (`DevStubSessionProvider::create_dev_session`), so
- * this form has nothing for a real identifier input to do. It still
- * includes a text input per PROMPT-18's acceptance criteria ("a form with
- * an input") — labeled honestly as an inert placeholder, disabled so it
- * can't be mistaken for something the backend reads.
+ * The prior dev-stub route (`POST /api/login/dev`) still exists
+ * server-side for local dev (`Config::is_dev()`), but this page always
+ * uses the real flow now.
  */
 
 interface LoginResponse {
   consultant_id: string
 }
 
-async function loginDev(): Promise<LoginResponse> {
-  const response = await fetch('/api/login/dev', {
+class NotApprovedError extends Error {}
+
+async function loginWithGoogle(): Promise<LoginResponse> {
+  const result = await signInWithPopup(firebaseAuth, googleAuthProvider)
+  const idToken = await result.user.getIdToken()
+
+  const response = await fetch('/api/login/firebase', {
     method: 'POST',
     credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id_token: idToken }),
   })
 
   if (!response.ok) {
-    throw new Error(`POST /api/login/dev failed: ${response.status}`)
+    const body = (await response.json().catch(() => null)) as { error?: string } | null
+    if (response.status === 403) {
+      throw new NotApprovedError(body?.error ?? 'not approved for access')
+    }
+    throw new Error(body?.error ?? `POST /api/login/firebase failed: ${response.status}`)
   }
 
   return (await response.json()) as LoginResponse
@@ -44,39 +52,65 @@ export function LoginPage() {
   const queryClient = useQueryClient()
 
   const mutation = useMutation({
-    mutationFn: loginDev,
+    mutationFn: loginWithGoogle,
     onSuccess: () => {
       // Same bare `['session']` key `useSessionQuery` reads — invalidating
       // it refetches `GET /api/session`, which now resolves against the
-      // cookie `POST /api/login/dev` just set, flipping `useSession()` to
-      // `'authenticated'` and swapping `LoginPage` for the app shell.
+      // cookie `POST /api/login/firebase` just set, flipping
+      // `useSession()` to `'authenticated'` and swapping `LoginPage` for
+      // the app shell.
       void queryClient.invalidateQueries({ queryKey: ['session'] })
     },
   })
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    mutation.mutate()
-  }
+  const isNotApproved = mutation.error instanceof NotApprovedError
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50">
-      <div className="w-full max-w-sm">
-        <Card title="Sign in">
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <TextInput
-              label="Dev consultant ID (unused — dev-stub always logs in as dev-consultant-001)"
-              value="dev-consultant-001"
-              disabled
-              readOnly
-            />
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-6">
+      <div className="pointer-events-none absolute inset-0" style={{ backgroundImage: 'var(--gradient-glow)' }} />
+      <div className="relative w-full max-w-md">
+        <Card>
+          <div className="flex flex-col gap-8 px-2 py-4">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              <span className="h-2 w-2 rounded-full bg-accent shadow-[0_0_6px_hsl(142_70%_50%/0.8)]" />
+              Secure Access
+            </div>
+
+            <div className="text-center">
+              <h1 className="bg-gradient-to-br from-primary to-[hsl(185_70%_65%)] bg-clip-text text-5xl font-extrabold tracking-tight text-transparent">
+                Cognitum.one
+              </h1>
+              <p className="mt-2 text-sm text-muted-foreground">Consultants</p>
+            </div>
+
+            <div className="flex justify-center">
+              <span className="inline-flex items-center gap-2 rounded-full border border-border/60 bg-secondary/40 px-4 py-1.5 text-xs font-medium text-muted-foreground">
+                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
+                Confidential — Internal Team Only
+              </span>
+            </div>
+
             {mutation.isError ? (
-              <Alert variant="error">Sign-in failed. Please try again.</Alert>
+              <Alert variant={isNotApproved ? 'warning' : 'error'}>
+                {isNotApproved
+                  ? mutation.error.message
+                  : `Sign-in failed: ${mutation.error.message}`}
+              </Alert>
             ) : null}
-            <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? 'Signing in…' : 'Sign in'}
+
+            <Button
+              onClick={() => mutation.mutate()}
+              disabled={mutation.isPending}
+              variant="secondary"
+              className="h-14 w-full"
+            >
+              {mutation.isPending ? 'Signing in…' : 'Sign in with Google'}
             </Button>
-          </form>
+
+            <p className="-mt-2 text-center text-xs text-muted-foreground">
+              Access is limited to approved consultant accounts
+            </p>
+          </div>
         </Card>
       </div>
     </div>

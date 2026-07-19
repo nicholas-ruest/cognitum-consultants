@@ -23,6 +23,7 @@
 use std::sync::Arc;
 
 use auth::dev_stub::DevStubSessionProvider;
+use auth::firebase::{FirebaseAuthError, FirebaseSessionProvider};
 use auth::{Session, SessionProvider};
 use axum::extract::{FromRef, Request, State};
 use axum::http::StatusCode;
@@ -54,7 +55,18 @@ pub struct AppState {
     /// `POST /api/login/dev` can call its stub-specific
     /// `create_dev_session`, which isn't (and shouldn't be) part of the
     /// general `SessionProvider` trait.
-    pub dev_session_provider: Arc<DevStubSessionProvider>,
+    /// `None` outside a `dev` environment — `DevStubSessionProvider::new`
+    /// panics if constructed there (ADR-008), so `main.rs` only constructs
+    /// this in dev; [`login_dev`] returns 503 when it's `None`.
+    pub dev_session_provider: Option<Arc<DevStubSessionProvider>>,
+    /// Real, Firebase-backed login provider — `Some` in any non-dev
+    /// environment (`main.rs` constructs it when `Config::firebase_project_id`
+    /// is set), `None` in dev, where [`Self::dev_session_provider`] is used
+    /// instead. Separate from [`Self::session_provider`] for the same
+    /// reason `dev_session_provider` is: `POST /api/login/firebase` needs
+    /// this provider's Firebase-specific `login_with_id_token`, which isn't
+    /// (and shouldn't be) part of the general `SessionProvider` trait.
+    pub firebase_session_provider: Option<Arc<FirebaseSessionProvider>>,
     /// Whether to set the `Secure` cookie flag (ADR-008: `Secure` in
     /// non-local environments), driven by `Config::is_dev()` at startup.
     pub secure_cookies: bool,
@@ -237,7 +249,12 @@ pub async fn login_dev(
     State(state): State<AppState>,
     jar: CookieJar,
 ) -> Result<(CookieJar, Json<Value>), Response> {
-    let session = state.dev_session_provider.create_dev_session().await.map_err(|err| {
+    let dev_session_provider = state.dev_session_provider.as_ref().ok_or_else(|| {
+        (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "dev login is not available in this environment" })))
+            .into_response()
+    })?;
+
+    let session = dev_session_provider.create_dev_session().await.map_err(|err| {
         tracing::error!(error = %err, "dev session creation failed");
         (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "session creation failed" })))
             .into_response()
@@ -251,6 +268,74 @@ pub async fn login_dev(
         .build();
 
     Ok((jar.add(cookie), Json(json!({ "consultant_id": session.consultant_id }))))
+}
+
+/// Request body for `POST /api/login/firebase`: the ID token obtained
+/// client-side from `signInWithPopup`/`getIdToken()` (Firebase JS SDK).
+#[derive(serde::Deserialize)]
+pub struct FirebaseLoginRequest {
+    pub id_token: String,
+}
+
+/// `POST /api/login/firebase`: the real login route. Verifies the
+/// Firebase ID token's signature, checks its email against the
+/// `approved_consultants` allowlist, and — only if both succeed — issues
+/// a persisted session cookie, same shape as [`login_dev`]. Distinguishes
+/// "not approved" (403, a clear message) from a bad/expired token (401)
+/// so the frontend can tell a consultant *why* they were rejected.
+pub async fn login_firebase(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Json(body): Json<FirebaseLoginRequest>,
+) -> Result<(CookieJar, Json<Value>), Response> {
+    let provider = state.firebase_session_provider.as_ref().ok_or_else(|| {
+        (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "firebase login is not configured" })))
+            .into_response()
+    })?;
+
+    let session = provider.login_with_id_token(&body.id_token).await.map_err(|err| {
+        let (status, message) = match &err {
+            FirebaseAuthError::NotApproved(email) => {
+                (StatusCode::FORBIDDEN, format!("{email} is not approved for access"))
+            }
+            FirebaseAuthError::NoVerifiedEmail => {
+                (StatusCode::FORBIDDEN, "your Google account has no verified email".to_owned())
+            }
+            _ => {
+                tracing::error!(error = %err, "firebase login failed");
+                (StatusCode::UNAUTHORIZED, "sign-in failed".to_owned())
+            }
+        };
+        (status, Json(json!({ "error": message }))).into_response()
+    })?;
+
+    let cookie = Cookie::build((SESSION_COOKIE_NAME, session.session_id.to_string()))
+        .http_only(true)
+        .secure(state.secure_cookies)
+        .same_site(SameSite::Strict)
+        .path("/")
+        .build();
+
+    Ok((jar.add(cookie), Json(json!({ "consultant_id": session.consultant_id }))))
+}
+
+/// `POST /api/logout`: invalidates the session server-side (not just
+/// clearing the cookie client-side — a copied/stolen session cookie must
+/// not still work after logout) via [`SessionProvider::delete_session`],
+/// then removes the cookie. Idempotent and always `200`, even with no
+/// cookie or an already-invalid session id: logging out of a session that
+/// isn't there isn't a failure from the caller's point of view.
+pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> (CookieJar, Json<Value>) {
+    if let Some(cookie) = jar.get(SESSION_COOKIE_NAME)
+        && let Ok(session_id) = Uuid::parse_str(cookie.value())
+        && let Err(err) = state.session_provider.delete_session(session_id).await
+    {
+        tracing::error!(error = %err, "session deletion failed during logout");
+    }
+
+    let removal_cookie = Cookie::build(SESSION_COOKIE_NAME).path("/").build();
+
+    (jar.remove(removal_cookie), Json(json!({ "ok": true })))
 }
 
 /// Response body for `GET /api/session`.

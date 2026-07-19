@@ -45,7 +45,7 @@ export function Dialog({ open, onClose, title, children }: DialogProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
@@ -54,10 +54,10 @@ export function Dialog({ open, onClose, title, children }: DialogProps) {
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="max-w-md rounded-lg bg-white p-6 shadow-lg outline-none"
+        className="max-w-md rounded-xl border border-border bg-card p-6 shadow-card outline-none"
         onClick={(event) => event.stopPropagation()}
       >
-        {title ? <h2 className="mb-4 text-lg font-semibold text-gray-900">{title}</h2> : null}
+        {title ? <h2 className="mb-4 text-lg font-semibold text-foreground">{title}</h2> : null}
         {children}
       </div>
     </div>

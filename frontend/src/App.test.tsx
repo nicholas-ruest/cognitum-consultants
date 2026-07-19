@@ -12,6 +12,35 @@ import App from './App'
 // heading with no logic); that assertion no longer applies now that App is
 // wired to real session state.
 
+/**
+ * Session response is per-test (varies by consultant id / permission
+ * assertions); every other endpoint `DashboardPage`'s always-rendered
+ * `NotificationCentre`/`ActionQueue` (PROMPT-33) and `GET /api/dashboard`
+ * fire on mount gets a URL-aware empty-shaped response here, matching the
+ * pattern `DashboardPage.test.tsx`/`useDashboardQuery.test.tsx` already use
+ * — a blanket `mockResolvedValue` answering every URL with the *session*
+ * body would hand `NotificationCentre`/`ActionQueue` a non-array `data`,
+ * which now crashes `ListDetailPanel` (PROMPT-42) instead of silently
+ * rendering nothing.
+ */
+function mockFetch(sessionBody: unknown) {
+  return vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input.toString()
+
+    if (url === '/api/session') {
+      return { ok: true, status: 200, json: async () => sessionBody }
+    }
+    if (url === '/api/dashboard') {
+      return { ok: true, status: 200, json: async () => ({ cards: [] }) }
+    }
+    if (url === '/api/notifications' || url === '/api/action-queue') {
+      return { ok: true, status: 200, json: async () => [] }
+    }
+
+    throw new Error(`unexpected fetch call: ${url}`)
+  })
+}
+
 function renderApp() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
@@ -48,14 +77,7 @@ describe('App', () => {
   })
 
   it('renders the authenticated app shell once a session resolves', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ consultant_id: 'dev-consultant-001' }),
-      }),
-    )
+    vi.stubGlobal('fetch', mockFetch({ consultant_id: 'dev-consultant-001' }))
 
     renderApp()
 
@@ -88,18 +110,14 @@ describe('App', () => {
   ])('renders exactly the nav items matching $description', async ({ capabilities }) => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({
+      mockFetch({
+        consultant_id: 'dev-consultant-001',
+        permission_assertions: capabilities.map((capability) => ({
           consultant_id: 'dev-consultant-001',
-          permission_assertions: capabilities.map((capability) => ({
-            consultant_id: 'dev-consultant-001',
-            capability,
-            scope: 'default',
-            expires_at: '2099-01-01T00:00:00Z',
-          })),
-        }),
+          capability,
+          scope: 'default',
+          expires_at: '2099-01-01T00:00:00Z',
+        })),
       }),
     )
 

@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react'
-import type { PermissionAssertion } from '../lib/useSessionQuery'
 
 /**
  * PROMPT-17 dashboard shell primitive.
@@ -56,8 +55,22 @@ export interface SidebarNavItem {
  * per-capability pages exist yet beyond the `features/` stubs — this
  * proves the conditional-rendering *mechanism*, not real navigation
  * destinations.
+ *
+ * `assertions` is typed structurally by `CapabilityAssertion` below rather
+ * than importing a consuming app's own permission-assertion type: this
+ * package (`@cognitum/design-system`) cannot depend on `frontend/src/lib`
+ * (or any other app's source) across the package boundary (ADR-017). Only
+ * the `capability` field is ever read here, so any consumer's richer
+ * assertion type (e.g. frontend's `PermissionAssertion` in
+ * `frontend/src/lib/useSessionQuery.ts`, which also carries
+ * `consultant_id`/`scope`/`expires_at`) already satisfies this shape
+ * structurally and can be passed straight through with no adapter.
  */
-export function navItemsFromAssertions(assertions: PermissionAssertion[]): SidebarNavItem[] {
+export interface CapabilityAssertion {
+  capability: string
+}
+
+export function navItemsFromAssertions(assertions: CapabilityAssertion[]): SidebarNavItem[] {
   const uniqueCapabilities = [...new Set(assertions.map((assertion) => assertion.capability))]
 
   return uniqueCapabilities.map((capability) => ({
@@ -77,19 +90,28 @@ export interface SidebarProps {
 export function Sidebar({ items }: SidebarProps) {
   return (
     <nav aria-label="Primary" className="flex flex-col gap-1 p-4">
-      <ul className="flex flex-col gap-1">
-        {items.map((item) => (
-          <li key={item.href}>
-            <a
-              href={item.href}
-              className="flex items-center gap-2 rounded px-3 py-2 text-sm text-gray-700 hover:bg-gray-100"
-            >
-              {item.icon}
-              <span>{item.label}</span>
-            </a>
-          </li>
-        ))}
-      </ul>
+      <h2 className="mb-1 px-3 text-[0.6875rem] font-semibold uppercase tracking-widest text-muted-foreground/70">
+        Modules
+      </h2>
+      {items.length === 0 ? (
+        <p className="rounded-md border border-dashed border-border/60 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
+          No capability modules assigned yet.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {items.map((item) => (
+            <li key={item.href}>
+              <a
+                href={item.href}
+                className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
     </nav>
   )
 }

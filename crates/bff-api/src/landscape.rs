@@ -404,6 +404,7 @@ mod tests {
             environment: config::DEV_ENVIRONMENT.to_owned(),
             static_dir: None,
             event_poll_interval_seconds: 5,
+            firebase_project_id: None,
         }
     }
 
@@ -435,7 +436,8 @@ mod tests {
         let state = AppState {
             db_pool: pool,
             session_provider,
-            dev_session_provider,
+            dev_session_provider: Some(dev_session_provider),
+            firebase_session_provider: None,
             secure_cookies: false,
             prometheus_handle: crate::metrics::shared_test_handle(),
             permission_cache,

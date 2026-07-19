@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert } from '../../components/Alert'
-import { Button } from '../../components/Button'
-import { TextInput } from '../../components/TextInput'
+import { Alert, TextInput } from '@cognitum/design-system'
+import { CapabilityForm } from '@cognitum/dashboard-components'
+import type { CapabilityFormAlert } from '@cognitum/dashboard-components'
 import { queryKeys } from '../../lib/queryKeys'
 import { useSession } from '../../lib/SessionContext'
 
@@ -164,7 +164,7 @@ export function ProfileEditForm() {
   }
 
   if (profileQuery.isPending) {
-    return <p className="text-sm text-gray-500">Loading your profile…</p>
+    return <p className="text-sm text-muted-foreground">Loading your profile…</p>
   }
 
   if (profileQuery.isError) {
@@ -173,46 +173,55 @@ export function ProfileEditForm() {
 
   const result = updateMutation.data
 
+  const alerts: CapabilityFormAlert[] = [
+    ...(result
+      ? [
+          {
+            variant: result.accepted ? ('info' as const) : ('warning' as const),
+            message: result.accepted
+              ? 'Profile update accepted.'
+              : `Profile update rejected${result.reason ? `: ${result.reason}` : '.'}`,
+          },
+        ]
+      : []),
+    ...(updateMutation.isError
+      ? [{ variant: 'error' as const, message: 'Failed to submit your profile update. Please try again.' }]
+      : []),
+  ]
+
   return (
-    <div className="flex flex-col gap-4">
-      {result ? (
-        <Alert variant={result.accepted ? 'info' : 'warning'}>
-          {result.accepted ? 'Profile update accepted.' : `Profile update rejected${result.reason ? `: ${result.reason}` : '.'}`}
-        </Alert>
-      ) : null}
-
-      {updateMutation.isError ? <Alert variant="error">Failed to submit your profile update. Please try again.</Alert> : null}
-
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-        <TextInput
-          label="Skills (comma-separated)"
-          value={fields.skills}
-          onChange={handleFieldChange('skills')}
-        />
-        <TextInput
-          label="Certifications (comma-separated)"
-          value={fields.certifications}
-          onChange={handleFieldChange('certifications')}
-        />
-        <TextInput
-          label="Languages (comma-separated)"
-          value={fields.languages}
-          onChange={handleFieldChange('languages')}
-        />
-        <TextInput
-          label="Availability Window"
-          value={fields.availabilityWindow}
-          onChange={handleFieldChange('availabilityWindow')}
-        />
-        <TextInput
-          label="Geographic Coverage (comma-separated)"
-          value={fields.geographicCoverage}
-          onChange={handleFieldChange('geographicCoverage')}
-        />
-        <Button type="submit" disabled={updateMutation.isPending}>
-          {updateMutation.isPending ? 'Saving…' : 'Save Profile'}
-        </Button>
-      </form>
-    </div>
+    <CapabilityForm
+      alerts={alerts}
+      onSubmit={handleSubmit}
+      submitLabel="Save Profile"
+      pendingLabel="Saving…"
+      isPending={updateMutation.isPending}
+    >
+      <TextInput
+        label="Skills (comma-separated)"
+        value={fields.skills}
+        onChange={handleFieldChange('skills')}
+      />
+      <TextInput
+        label="Certifications (comma-separated)"
+        value={fields.certifications}
+        onChange={handleFieldChange('certifications')}
+      />
+      <TextInput
+        label="Languages (comma-separated)"
+        value={fields.languages}
+        onChange={handleFieldChange('languages')}
+      />
+      <TextInput
+        label="Availability Window"
+        value={fields.availabilityWindow}
+        onChange={handleFieldChange('availabilityWindow')}
+      />
+      <TextInput
+        label="Geographic Coverage (comma-separated)"
+        value={fields.geographicCoverage}
+        onChange={handleFieldChange('geographicCoverage')}
+      />
+    </CapabilityForm>
   )
 }

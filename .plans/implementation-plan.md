@@ -110,7 +110,7 @@ A follow-on ADR agent should produce one ADR per topic below. This plan intentio
 - [ ] ADR: Consultant preferences & UI view-state persistence (embedded store vs Postgres vs Redis vs delegate to another service)
 - [ ] ADR: Observability stack for the Rust BFF (tracing/logging/metrics libraries, correlation IDs across Nexus hops)
 - [ ] ADR: Deployment/infra target and CI/CD pipeline shape
-- [ ] ADR: Design-system extraction packaging strategy (npm workspace package vs separate repo vs private registry) — Phase 5
+- [x] ADR: Design-system extraction packaging strategy (npm workspace package vs separate repo vs private registry) — Phase 5 ([ADR-017](./adr/ADR-017-design-system-packaging-strategy.md))
 - [ ] ADR: Testing strategy against Nexus (contract tests, mocking/stub strategy, e2e approach)
 - [ ] ADR: Resilience patterns for concurrent multi-capability aggregation (timeouts, partial failure/graceful degradation when one Nexus-routed capability is slow/down)
 

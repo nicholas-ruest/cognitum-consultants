@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
-import { Alert } from '../../components/Alert'
+import { Alert } from '@cognitum/design-system'
+import { ListDetailPanel } from '@cognitum/dashboard-components'
 import { queryKeys } from '../../lib/queryKeys'
 import { useSession } from '../../lib/SessionContext'
 
@@ -77,7 +78,7 @@ export function LearningDashboard() {
   })
 
   if (catalogQuery.isPending) {
-    return <p className="text-sm text-gray-500">Loading your learning catalog…</p>
+    return <p className="text-sm text-muted-foreground">Loading your learning catalog…</p>
   }
 
   if (catalogQuery.isError) {
@@ -89,7 +90,7 @@ export function LearningDashboard() {
   const trainingDue = snapshots.filter(isTrainingDue)
 
   if (snapshots.length === 0) {
-    return <p className="text-xs text-gray-500">No courses yet.</p>
+    return <p className="text-xs text-muted-foreground">No courses yet.</p>
   }
 
   return (
@@ -110,15 +111,16 @@ interface LearningSectionProps {
 function LearningSection({ title, items, emptyMessage }: LearningSectionProps) {
   return (
     <section>
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">{title}</h4>
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h4>
       {items.length === 0 ? (
-        <p className="text-xs text-gray-500">{emptyMessage}</p>
+        <p className="text-xs text-muted-foreground">{emptyMessage}</p>
       ) : (
-        <ul className="mt-1 flex flex-col gap-2">
-          {items.map((item) => (
-            <LearningSnapshotRow key={`${title}-${item.course_id}`} item={item} />
-          ))}
-        </ul>
+        <ListDetailPanel
+          items={items}
+          getKey={(item) => `${title}-${item.course_id}`}
+          listClassName="mt-1 flex flex-col gap-2"
+          renderRow={(item) => <LearningSnapshotRow item={item} />}
+        />
       )}
     </section>
   )
@@ -126,21 +128,21 @@ function LearningSection({ title, items, emptyMessage }: LearningSectionProps) {
 
 function LearningSnapshotRow({ item }: { item: LearningSnapshot }) {
   return (
-    <li className="rounded border border-gray-200 p-3">
+    <div className="rounded border border-border p-3">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-sm font-semibold text-gray-900">{item.title}</p>
-        <span className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-700">{item.progress_status}</span>
+        <p className="text-sm font-semibold text-foreground">{item.title}</p>
+        <span className="rounded bg-secondary px-2 py-0.5 text-xs text-card-foreground">{item.progress_status}</span>
       </div>
       {/* Truthy-checked, not `!== null`-checked — see `hasCertification`'s
           doc comment above for why. */}
       {item.certification_status ? (
-        <p className="text-xs text-gray-500">Certification: {item.certification_status}</p>
+        <p className="text-xs text-muted-foreground">Certification: {item.certification_status}</p>
       ) : null}
       {item.deep_link ? (
-        <a href={item.deep_link} className="text-xs text-blue-600 hover:underline" target="_blank" rel="noreferrer">
+        <a href={item.deep_link} className="text-xs text-primary hover:underline" target="_blank" rel="noreferrer">
           Open in Edu
         </a>
       ) : null}
-    </li>
+    </div>
   )
 }
