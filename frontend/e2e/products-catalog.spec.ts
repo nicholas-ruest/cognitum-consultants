@@ -59,9 +59,10 @@ test('logs in, adds the Products card, sees the approved catalog, and can view a
   expect(putResponse.ok()).toBe(true)
   await page.reload()
 
-  // 4. The Products card renders, listing the mock Nexus server's fixed
-  // `PRODUCT_CATALOG_FIXTURE` (`mock-nexus-server.ts`) — one product with a
-  // demo asset, one without.
+  // 4. Navigate to the Products module route (ADR-020 part C). The card
+  // renders, listing the mock Nexus server's fixed `PRODUCT_CATALOG_FIXTURE`
+  // (`mock-nexus-server.ts`) — one product with a demo asset, one without.
+  await page.getByRole('link', { name: 'Products' }).click()
   await expect(page.getByRole('heading', { name: 'Products', level: 3 })).toBeVisible()
   await expect(page.getByText('Cloud Migration Accelerator')).toBeVisible()
   await expect(page.getByText('Security Posture Review')).toBeVisible()

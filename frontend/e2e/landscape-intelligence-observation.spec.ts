@@ -55,9 +55,12 @@ test('logs in, adds the Landscape card, sees the intelligence digest, and submit
   expect(putResponse.ok()).toBe(true)
   await page.reload()
 
-  // 4. The Landscape card renders, listing the mock Nexus server's fixed
-  // `INTELLIGENCE_DIGEST_FIXTURE` (`mock-nexus-server.ts`) — one item with a
-  // deep link, one without.
+  // 4. Navigate to the Landscape module route (ADR-020 part C; `exact:
+  // true` since "Open in Landscape" — asserted below — would otherwise
+  // substring-match the same nav link name). The card renders, listing the
+  // mock Nexus server's fixed `INTELLIGENCE_DIGEST_FIXTURE`
+  // (`mock-nexus-server.ts`) — one item with a deep link, one without.
+  await page.getByRole('link', { name: 'Landscape', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Landscape', level: 3 })).toBeVisible()
   await expect(page.getByText('Cloud Migration Trends')).toBeVisible()
   await expect(page.getByText('Regulatory Shifts')).toBeVisible()

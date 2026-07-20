@@ -11,10 +11,12 @@ import { MOCK_NEXUS_BASE_URL_ENV } from './support/constants'
  * Flow: Sales lead-conflict check with a `no_match`/`creation_allowed: true`
  * result (`mock-nexus-server.ts`'s `NO_MATCH_COMPANY_NAME` carve-out) ->
  * click "Start Proposal in Commit" -> `POST /api/workflow-sessions` starts a
- * `CrossCapabilityWorkflowSession` -> full navigation to
- * `/?workflow_session_id=...` -> `ProposalWorkspace` consumes it and calls
- * `POST /api/commit/proposals` -> the new proposal is visible in the Commit
- * feature module. No new orchestration files needed — reuses
+ * `CrossCapabilityWorkflowSession` -> client-side navigation (ADR-020 part C
+ * gave this app a real router; this used to be a full
+ * `window.location.assign` navigation before that) to
+ * `/modules/commit?workflow_session_id=...` -> `ProposalWorkspace` consumes
+ * it and calls `POST /api/commit/proposals` -> the new proposal is visible
+ * in the Commit feature module. No new orchestration files needed — reuses
  * `playwright.config.ts`'s existing `globalSetup`.
  */
 
@@ -40,13 +42,18 @@ test('drives the Sales conflict check (no_match) through the Commit deep link to
   await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
   await page.getByRole('button', { name: 'Sign in' }).click()
 
-  // 2. Dashboard renders both the Sales and Commit cards — proves the mock
-  // Armor endpoint granted both capabilities and `GET /api/dashboard`
-  // included both in its default card set.
+  // 2. Both Sales and Commit are granted (mock Armor endpoint) and both are
+  // in `GET /api/dashboard`'s default card set, but ADR-020 part C means
+  // only one module route is visible at a time now — check Commit's clean
+  // "No proposals yet." state first, before Sales' own flow below creates
+  // one, then navigate to Sales to start it.
   await expect(page.getByRole('heading', { name: 'Cognitum Consultants', level: 1 })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Sales', level: 3 })).toBeVisible()
+  await page.getByRole('link', { name: 'Commit' }).click()
   await expect(page.getByRole('heading', { name: 'Commit', level: 3 })).toBeVisible()
   await expect(page.getByText('No proposals yet.')).toBeVisible()
+
+  await page.getByRole('link', { name: 'Sales' }).click()
+  await expect(page.getByRole('heading', { name: 'Sales', level: 3 })).toBeVisible()
 
   // 3. Check a company name the mock Nexus server answers with the
   // no_match/creation_allowed:true fixture.
@@ -62,15 +69,15 @@ test('drives the Sales conflict check (no_match) through the Commit deep link to
   await expect(startProposalButton).toBeVisible()
 
   // 5. Click it: `POST /api/workflow-sessions` starts the hand-off session,
-  // then a full navigation to `/?workflow_session_id=...` follows.
-  await Promise.all([page.waitForURL(/workflow_session_id=/), startProposalButton.click()])
+  // then a client-side navigation to `/modules/commit?workflow_session_id=...`
+  // follows.
+  await Promise.all([page.waitForURL(/\/modules\/commit\?workflow_session_id=/), startProposalButton.click()])
 
-  // 6. The app reloads (session cookie persists across the full
-  // navigation — no re-login needed) and `ProposalWorkspace` consumes the
+  // 6. `ProposalWorkspace`, now mounted at `/modules/commit`, consumes the
   // query param, firing `POST /api/commit/proposals` with
   // `origin_workflow_session_id`. The resulting proposal appears in the
   // Commit card's list.
-  await expect(page.getByRole('heading', { name: 'Cognitum Consultants', level: 1 })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Commit', level: 3 })).toBeVisible()
   // `ProposalWorkspace` selects the freshly created proposal automatically
   // (see its `createMutation.onSuccess`), so its title appears twice: once
   // in the list entry, once as the detail view's own heading.

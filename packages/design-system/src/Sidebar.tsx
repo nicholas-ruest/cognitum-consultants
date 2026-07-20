@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { Link } from 'react-router-dom'
 
 /**
  * PROMPT-17 dashboard shell primitive.
@@ -51,10 +52,8 @@ export interface SidebarNavItem {
  * `PermissionCache::is_permitted`'s "capability name only" doc comment in
  * `crates/bff-api/src/permissions.rs`).
  *
- * `href` points at a stub route (`/{capability}`) since no real
- * per-capability pages exist yet beyond the `features/` stubs — this
- * proves the conditional-rendering *mechanism*, not real navigation
- * destinations.
+ * `href` points at `/modules/{capability}` (ADR-020 part C) — the real
+ * client-side route `DashboardPage` mounts one per permitted card.
  *
  * `assertions` is typed structurally by `CapabilityAssertion` below rather
  * than importing a consuming app's own permission-assertion type: this
@@ -75,7 +74,7 @@ export function navItemsFromAssertions(assertions: CapabilityAssertion[]): Sideb
 
   return uniqueCapabilities.map((capability) => ({
     label: capitalize(capability),
-    href: `/${capability}`,
+    href: `/modules/${capability}`,
   }))
 }
 
@@ -101,13 +100,13 @@ export function Sidebar({ items }: SidebarProps) {
         <ul className="flex flex-col gap-1">
           {items.map((item) => (
             <li key={item.href}>
-              <a
-                href={item.href}
+              <Link
+                to={item.href}
                 className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
               >
                 {item.icon}
                 <span>{item.label}</span>
-              </a>
+              </Link>
             </li>
           ))}
         </ul>

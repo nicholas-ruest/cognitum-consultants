@@ -53,8 +53,13 @@ test('logs in, sees the delivery workspace, requests task completion through the
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.getByRole('heading', { name: 'Cognitum Consultants', level: 1 })).toBeVisible()
 
-  // 2. The Execution card renders by default (it's in DEFAULT_CARD_MODULE_IDS),
-  // listing the mock Nexus server's fixed `ENGAGEMENT_SNAPSHOT_FIXTURE`.
+  // 2. Navigate to the Execution module route (ADR-020 part C; `exact:
+  // true` since "Open in Execution" — asserted below — would otherwise
+  // substring-match the same nav link name). It's in
+  // DEFAULT_CARD_MODULE_IDS, so no `PUT /api/dashboard` dance is needed
+  // first — the card renders, listing the mock Nexus server's fixed
+  // `ENGAGEMENT_SNAPSHOT_FIXTURE`.
+  await page.getByRole('link', { name: 'Execution', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Execution', level: 3 })).toBeVisible()
   await expect(page.getByText('engagement-1')).toBeVisible()
   await expect(page.getByText('on_track')).toBeVisible()
@@ -113,11 +118,13 @@ test('logs in, sees the delivery workspace, requests task completion through the
   })
   expect(enqueueResponse.ok()).toBe(true)
 
-  // 6. Wait for it to appear in the Action Queue card — same SSE-driven
-  // chain `notifications-sse.spec.ts` proves, this time landing as an
-  // `ActionQueueEntry` (per PROMPT-38's classifier wiring) rather than a
-  // `NotificationItem`.
-  //
+  // 6. The Action Queue card lives on the Overview route (ADR-020 part C),
+  // not the Execution module route this spec has been on since step 2 —
+  // navigate back before looking for the entry it lands in. Wait for it to
+  // appear — same SSE-driven chain `notifications-sse.spec.ts` proves, this
+  // time landing as an `ActionQueueEntry` (per PROMPT-38's classifier
+  // wiring) rather than a `NotificationItem`.
+  await page.getByRole('link', { name: 'Overview' }).click()
   // Scoped to the Action Queue card's own list item (not a page-wide
   // `page.getByText(...)`) from this point on: when this spec runs as part
   // of the full suite (not in isolation), sibling dashboard cards other

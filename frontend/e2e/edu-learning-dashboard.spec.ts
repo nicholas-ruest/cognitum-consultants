@@ -71,9 +71,12 @@ test('logs in, adds the Edu card, and sees the learning catalog partitioned into
   expect(putResponse.ok()).toBe(true)
   await page.reload()
 
-  // 4. The Edu card renders, and the mock Nexus server's fixed
-  // `LEARNING_CATALOG_FIXTURE` (`mock-nexus-server.ts`) is partitioned into
-  // the three documented sections.
+  // 4. Navigate to the Edu module route (ADR-020 part C; `exact: true` since
+  // "Open in Edu" — asserted below — would otherwise substring-match the
+  // same nav link name). The card renders, and the mock Nexus server's
+  // fixed `LEARNING_CATALOG_FIXTURE` (`mock-nexus-server.ts`) is
+  // partitioned into the three documented sections.
+  await page.getByRole('link', { name: 'Edu', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Edu', level: 3 })).toBeVisible()
   // `getByText(...).first()`: "Cloud Security Fundamentals" renders in both
   // the Courses and Certifications sections (it has a certification), so a

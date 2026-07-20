@@ -1,7 +1,17 @@
+import type { ReactElement } from 'react'
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import type { CapabilityAssertion } from './Sidebar'
 import { navItemsFromAssertions, Sidebar } from './Sidebar'
+
+// `Sidebar` renders `Link`s (ADR-020 part C), which require a Router context
+// to resolve `to` -- `MemoryRouter` provides one without touching the real
+// browser `window.location`, the same way every other router-aware test in
+// this repo isolates navigation state.
+function renderWithRouter(ui: ReactElement) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>)
+}
 
 // A consuming app's own richer assertion type (e.g. frontend's
 // `PermissionAssertion` in `frontend/src/lib/useSessionQuery.ts`, which
@@ -14,7 +24,7 @@ function assertion(capability: string): CapabilityAssertion {
 
 describe('Sidebar', () => {
   it('renders the nav items passed to it', () => {
-    render(
+    renderWithRouter(
       <Sidebar
         items={[
           { label: 'Home', href: '/home' },
@@ -30,7 +40,7 @@ describe('Sidebar', () => {
   })
 
   it('does not crash with an empty items list', () => {
-    render(<Sidebar items={[]} />)
+    renderWithRouter(<Sidebar items={[]} />)
 
     expect(screen.getByRole('navigation', { name: 'Primary' })).toBeInTheDocument()
   })
@@ -46,8 +56,8 @@ describe('navItemsFromAssertions', () => {
     const items = navItemsFromAssertions([assertion('sales'), assertion('delivery')])
 
     expect(items).toEqual([
-      { label: 'Sales', href: '/sales' },
-      { label: 'Delivery', href: '/delivery' },
+      { label: 'Sales', href: '/modules/sales' },
+      { label: 'Delivery', href: '/modules/delivery' },
     ])
   })
 
@@ -55,7 +65,7 @@ describe('navItemsFromAssertions', () => {
     const items = navItemsFromAssertions([assertion('sales'), assertion('sales')])
 
     expect(items).toHaveLength(1)
-    expect(items[0]).toEqual({ label: 'Sales', href: '/sales' })
+    expect(items[0]).toEqual({ label: 'Sales', href: '/modules/sales' })
   })
 
   it('returns no nav items for an empty assertion set', () => {

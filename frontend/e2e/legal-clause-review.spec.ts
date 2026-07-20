@@ -35,14 +35,16 @@ test('shows approved legal clauses for a Commit proposal under review', async ({
   await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible()
   await page.getByRole('button', { name: 'Sign in' }).click()
 
-  // 2. The Commit card renders (one of the three default dashboard cards).
-  // Deliberately not asserting an empty "No proposals yet." state here —
-  // unlike this spec's own proposal (identified by its own unique title
-  // below), the Commit proposals list is shared mock-Nexus-server state
-  // across every e2e spec in a full suite run (`mock-nexus-server.ts`'s
-  // module docs), so another spec's proposal may already exist by the time
-  // this one runs.
+  // 2. Navigate to the Commit module route (ADR-020 part C; one of the
+  // three default dashboard cards, so no `PUT /api/dashboard` dance is
+  // needed first). Deliberately not asserting an empty "No proposals yet."
+  // state here — unlike this spec's own proposal (identified by its own
+  // unique title below), the Commit proposals list is shared mock-Nexus-
+  // server state across every e2e spec in a full suite run
+  // (`mock-nexus-server.ts`'s module docs), so another spec's proposal may
+  // already exist by the time this one runs.
   await expect(page.getByRole('heading', { name: 'Cognitum Consultants', level: 1 })).toBeVisible()
+  await page.getByRole('link', { name: 'Commit' }).click()
   await expect(page.getByRole('heading', { name: 'Commit', level: 3 })).toBeVisible()
 
   // 3. Start a proposal directly (no Sales hand-off needed for this flow).

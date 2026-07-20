@@ -1,3 +1,4 @@
+import { BrowserRouter } from 'react-router-dom'
 import { SessionProvider, useSession } from './lib/SessionContext'
 import { DashboardPage } from './pages/DashboardPage'
 import { LoginPage } from './pages/LoginPage'
@@ -7,9 +8,12 @@ import { LoginPage } from './pages/LoginPage'
  *
  * "Redirect to dashboard" (PROMPT-18's acceptance criteria) is implemented
  * as a conditional render swap on `useSession()`'s status, not a router
- * navigation — no ADR mandates a client-side router yet for this unit. A
- * router can replace this swap later without changing `SessionContext`'s
- * contract.
+ * navigation — `LoginPage`/`DashboardPage` aren't alternate routes of one
+ * router, they're gated on auth state itself (there's no unauthenticated
+ * URL a router could dispatch on). `BrowserRouter` (ADR-020 part C) wraps
+ * both branches here regardless, since `DashboardPage`'s own `Routes` (and
+ * `Sidebar`'s `Link`s) need a router context above them the moment
+ * `AppShell` picks the authenticated branch.
  *
  * The authenticated branch renders `DashboardPage` (PROMPT-23), which owns
  * the `Layout`/`Header`/`Sidebar` shell itself — `AppShell` just picks which
@@ -43,9 +47,11 @@ function AppShell() {
 
 function App() {
   return (
-    <SessionProvider>
-      <AppShell />
-    </SessionProvider>
+    <BrowserRouter>
+      <SessionProvider>
+        <AppShell />
+      </SessionProvider>
+    </BrowserRouter>
   )
 }
 

@@ -37,11 +37,14 @@ test('logs in, checks a company for a sales conflict, and requests collaboration
   // 2. Log in via the dev-stub, through the UI's login form (PROMPT-18).
   await page.getByRole('button', { name: 'Sign in' }).click()
 
-  // 3. Dashboard renders, and the Sales card/nav item is visible — proves
-  // the mock Armor endpoint granted "sales" (mock-nexus-server.ts) and
-  // `GET /api/dashboard` filtered the default card set to include it.
+  // 3. Dashboard renders at the Overview route; the Sales nav item is
+  // visible — proves the mock Armor endpoint granted "sales"
+  // (mock-nexus-server.ts). Clicking it navigates (ADR-020 part C) to
+  // `/modules/sales`, which resolves once `GET /api/dashboard` includes
+  // the "sales" card in its default set.
   await expect(page.getByRole('heading', { name: 'Cognitum Consultants', level: 1 })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Sales' })).toBeVisible()
+  await page.getByRole('link', { name: 'Sales' }).click()
   await expect(page.getByRole('heading', { name: 'Sales', level: 3 })).toBeVisible()
 
   // 4. Enter a company name in the Sales lead-conflict form.

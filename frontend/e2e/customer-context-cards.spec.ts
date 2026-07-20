@@ -59,9 +59,12 @@ test('logs in, adds the Customer card, sees the assigned customer list, and can 
   expect(putResponse.ok()).toBe(true)
   await page.reload()
 
-  // 4. The Customer card renders, listing the mock Nexus server's fixed
-  // `CUSTOMER_CONTEXT_FIXTURE` (`mock-nexus-server.ts`) — one healthy, one
-  // at-risk customer.
+  // 4. Navigate to the Customer module route (ADR-020 part C; `exact: true`
+  // since "Open in Customer" — asserted later, once a customer is selected
+  // — would otherwise substring-match the same nav link name). The card
+  // renders, listing the mock Nexus server's fixed `CUSTOMER_CONTEXT_FIXTURE`
+  // (`mock-nexus-server.ts`) — one healthy, one at-risk customer.
+  await page.getByRole('link', { name: 'Customer', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Customer', level: 3 })).toBeVisible()
   await expect(page.getByText('Acme Corp')).toBeVisible()
   await expect(page.getByText('Beta LLC')).toBeVisible()

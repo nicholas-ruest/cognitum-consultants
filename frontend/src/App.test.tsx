@@ -89,11 +89,15 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: 'Cognitum Consultants' })).toBeInTheDocument()
   })
 
-  // PROMPT-19 (ADR-009): the sidebar's nav items are built from
-  // `GET /api/session`'s `permission_assertions` field. Each case mocks a
-  // different assertion set and asserts the rendered Sidebar shows exactly
-  // the matching nav items — proving the conditional-rendering mechanism,
-  // not real navigation destinations (no per-capability pages exist yet).
+  // PROMPT-19 (ADR-009): the sidebar's capability-derived nav items are
+  // built from `GET /api/session`'s `permission_assertions` field. Each
+  // case mocks a different assertion set and asserts the rendered Sidebar
+  // shows exactly the matching nav items — proving the conditional-
+  // rendering mechanism, not real navigation destinations. `DashboardPage`
+  // always prepends one additional "Overview" item ahead of these
+  // (ADR-020 part C, the one nav destination not gated by a capability
+  // grant), so the expected count/links below account for it separately
+  // from the capability-driven ones this test is actually about.
   it.each([
     {
       description: 'three permitted capabilities',
@@ -132,11 +136,12 @@ describe('App', () => {
     const nav = screen.getByRole('navigation', { name: 'Primary' })
     const links = within(nav).queryAllByRole('link')
 
-    expect(links).toHaveLength(capabilities.length)
+    expect(within(nav).getByRole('link', { name: 'Overview' })).toHaveAttribute('href', '/')
+    expect(links).toHaveLength(capabilities.length + 1)
     capabilities.forEach((capability) => {
       expect(
         within(nav).getByRole('link', { name: new RegExp(`^${capability}$`, 'i') }),
-      ).toHaveAttribute('href', `/${capability}`)
+      ).toHaveAttribute('href', `/modules/${capability}`)
     })
   })
 })

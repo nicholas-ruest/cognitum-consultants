@@ -2,6 +2,7 @@ import type { ReactElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { LeadConflictCheck } from './LeadConflictCheck'
 
 // PROMPT-26: `LeadConflictCheck` drives the Sales lead-conflict-warning
@@ -18,9 +19,25 @@ const ACTIVE_OWNED_ACCOUNT_RESPONSE = {
   permitted_actions: ['request_collaboration', 'submit_referral', 'cancel'],
 }
 
+// `LeadConflictCheck` calls `useNavigate()` unconditionally (ADR-020 part
+// C's Sales -> Commit deep link), which throws outside a Router context —
+// every render in this file needs one, not just the deep-link test below.
 function renderWithProviders(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+  return render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={['/modules/sales']}>{ui}</MemoryRouter>
+    </QueryClientProvider>,
+  )
+}
+
+// Stands in for `ProposalWorkspace` at `/modules/commit` in the deep-link
+// test below — renders the landed pathname+search so the test can assert on
+// where `navigate()` actually went without depending on Commit's own
+// feature module or its fetch mocks.
+function CommitRouteProbe() {
+  const location = useLocation()
+  return <div data-testid="commit-route-probe">{location.pathname + location.search}</div>
 }
 
 function submitCompanyName(name: string) {
@@ -158,14 +175,22 @@ describe('LeadConflictCheck', () => {
       throw new Error(`unexpected fetch call: ${url}`)
     })
     vi.stubGlobal('fetch', fetchMock)
-    // jsdom's `window.location.assign` is non-configurable (spying on it
-    // directly throws), so the whole `location` object is stubbed instead
-    // — `vi.unstubAllGlobals()` in `afterEach` restores it, same mechanism
-    // this file already uses for `fetch`.
-    const assignSpy = vi.fn()
-    vi.stubGlobal('location', { ...window.location, assign: assignSpy })
 
-    renderWithProviders(<LeadConflictCheck />)
+    // Renders the real target route alongside the source route so a
+    // successful `navigate()` call is observable as content, not just as a
+    // mocked function call — proves the deep link actually lands on
+    // `/modules/commit` with the session id preserved in the query string.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/modules/sales']}>
+          <Routes>
+            <Route path="/modules/sales" element={<LeadConflictCheck />} />
+            <Route path="/modules/commit" element={<CommitRouteProbe />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
     submitCompanyName('Nova Ventures')
 
     await waitFor(() => {
@@ -175,7 +200,7 @@ describe('LeadConflictCheck', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start Proposal in Commit' }))
 
     await waitFor(() => {
-      expect(assignSpy).toHaveBeenCalledWith('/?workflow_session_id=session-123')
+      expect(screen.getByTestId('commit-route-probe')).toHaveTextContent('?workflow_session_id=session-123')
     })
   })
 

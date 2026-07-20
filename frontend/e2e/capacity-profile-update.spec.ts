@@ -52,8 +52,10 @@ test('logs in, adds the Capacity card, edits the profile, and sees the accepted 
   expect(putResponse.ok()).toBe(true)
   await page.reload()
 
-  // 4. The Capacity card renders, pre-populated from the mock Nexus
-  // server's fixed `PROFILE_FIXTURE` (`mock-nexus-server.ts`).
+  // 4. Navigate to the Capacity module route (ADR-020 part C) — the card
+  // renders, pre-populated from the mock Nexus server's fixed
+  // `PROFILE_FIXTURE` (`mock-nexus-server.ts`).
+  await page.getByRole('link', { name: 'Capacity' }).click()
   await expect(page.getByRole('heading', { name: 'Capacity', level: 3 })).toBeVisible()
   await expect(page.getByLabel('Skills (comma-separated)')).toHaveValue('Rust, Cloud Architecture')
   await expect(page.getByLabel('Availability Window')).toHaveValue('2026-08-01/2026-12-31')

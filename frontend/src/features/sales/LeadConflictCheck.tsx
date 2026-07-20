@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useMutation } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { TextInput, Button, Alert } from '@cognitum/design-system'
 import type { AlertVariant } from '@cognitum/design-system'
 import { CapabilityForm } from '@cognitum/dashboard-components'
@@ -125,19 +126,22 @@ function humanizeActionId(actionId: string): string {
 
 export function LeadConflictCheck() {
   const [companyName, setCompanyName] = useState('')
+  const navigate = useNavigate()
 
   const checkMutation = useMutation({ mutationFn: checkLeadConflict })
   const collaborationMutation = useMutation({ mutationFn: requestCollaboration })
   const referralMutation = useMutation({ mutationFn: submitReferral })
-  // PROMPT-34 deep link: on success, navigate to the dashboard with the new
-  // session's id as a query param — `ProposalWorkspace.tsx` consumes it and
-  // fires the actual `create_proposal` call. A full navigation (not a
-  // client-side router push, since this app has none — see `App.tsx`'s
-  // doc comment) is safe here: the session cookie persists across it.
+  // PROMPT-34 deep link: on success, navigate to the Commit module route
+  // with the new session's id as a query param — `ProposalWorkspace.tsx`
+  // consumes it and fires the actual `create_proposal` call. ADR-020 part C
+  // gave this app a real client-side router, replacing the old full
+  // `window.location.assign` navigation this used before real routes
+  // existed — `navigate()` remounts `ProposalWorkspace` at `/modules/commit`
+  // the same way a hard navigation would, without the full page reload.
   const startProposalMutation = useMutation({
     mutationFn: startWorkflowSessionToCommit,
     onSuccess: (workflowSession) => {
-      window.location.assign(`/?workflow_session_id=${encodeURIComponent(workflowSession.session_id)}`)
+      navigate(`/modules/commit?workflow_session_id=${encodeURIComponent(workflowSession.session_id)}`)
     },
   })
 

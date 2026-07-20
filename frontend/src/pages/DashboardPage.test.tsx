@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MemoryRouter } from 'react-router-dom'
 import { SessionProvider, useSession } from '../lib/SessionContext'
 import { DashboardPage } from './DashboardPage'
 
-// PROMPT-23: `DashboardPage` renders one `Card` per `GET /api/dashboard`
-// entry, labeled by `module_id`. No backend runs here — `fetch` is mocked
-// per-URL (session + dashboard), the same pattern as
+// PROMPT-23/ADR-020 part C: `DashboardPage` now renders real routes -- `/`
+// (Overview: Notifications/Action Queue/My Action List) and
+// `/modules/:moduleId` (the one `GET /api/dashboard` card matching that id,
+// replacing the old everything-on-one-scroll `CardGrid`). No backend runs
+// here -- `fetch` is mocked per-URL, the same pattern as
 // `useDashboardQuery.test.tsx`.
 
 interface MockCard {
@@ -14,7 +17,7 @@ interface MockCard {
   position: number
 }
 
-function mockFetch(cards: MockCard[]) {
+function mockFetch(cards: MockCard[], grantedCapabilities: string[] = []) {
   return vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString()
 
@@ -22,7 +25,15 @@ function mockFetch(cards: MockCard[]) {
       return {
         ok: true,
         status: 200,
-        json: async () => ({ consultant_id: 'consultant-1', permission_assertions: [] }),
+        json: async () => ({
+          consultant_id: 'consultant-1',
+          permission_assertions: grantedCapabilities.map((capability) => ({
+            consultant_id: 'consultant-1',
+            capability,
+            scope: 'default',
+            expires_at: '2099-01-01T00:00:00Z',
+          })),
+        }),
       }
     }
 
@@ -36,9 +47,8 @@ function mockFetch(cards: MockCard[]) {
 
     // PROMPT-33: `DashboardPage` now always renders `NotificationCentre`/
     // `ActionQueue`, each firing its own `GET` on mount — stubbed empty
-    // here since this test suite is about the `GET /api/dashboard`-driven
-    // cards, not notification/action-queue content (covered by those
-    // components' own test files).
+    // here since this test suite is about routing, not notification/
+    // action-queue content (covered by those components' own test files).
     if (url === '/api/notifications' || url === '/api/action-queue') {
       return { ok: true, status: 200, json: async () => [] }
     }
@@ -66,13 +76,15 @@ function AuthenticatedDashboard() {
   return <DashboardPage session={session} />
 }
 
-function renderWithProviders() {
+function renderWithProviders(initialPath = '/') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={client}>
-      <SessionProvider>
-        <AuthenticatedDashboard />
-      </SessionProvider>
+      <MemoryRouter initialEntries={[initialPath]}>
+        <SessionProvider>
+          <AuthenticatedDashboard />
+        </SessionProvider>
+      </MemoryRouter>
     </QueryClientProvider>,
   )
 }
@@ -82,7 +94,21 @@ describe('DashboardPage', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders one Card per dashboard cards entry with the module_id as its label', async () => {
+  it('renders the Overview cards at "/", with no module content', async () => {
+    vi.stubGlobal('fetch', mockFetch([{ module_id: 'sales', position: 0 }]))
+
+    renderWithProviders('/')
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument()
+    })
+    expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Action Queue' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'My Action List' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Sales' })).not.toBeInTheDocument()
+  })
+
+  it('renders the one dashboard card matching the :moduleId route param, with its real feature module', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch([
@@ -91,40 +117,44 @@ describe('DashboardPage', () => {
       ]),
     )
 
-    renderWithProviders()
+    renderWithProviders('/modules/sales')
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Sales' })).toBeInTheDocument()
-      expect(screen.getByRole('heading', { name: 'Commit' })).toBeInTheDocument()
     })
-
-    // PROMPT-26/34: the "sales" card hosts the real `LeadConflictCheck`
-    // feature module and the "commit" card hosts the real
-    // `ProposalWorkspace` feature module, not the placeholder — no card in
-    // this fixture is left rendering it.
-    expect(screen.queryByText('no live data yet')).not.toBeInTheDocument()
     expect(screen.getByLabelText('Company Name')).toBeInTheDocument()
-    await waitFor(() => {
-      expect(screen.getByLabelText('Origin Reference')).toBeInTheDocument()
-    })
+
+    // Only the routed-to card renders -- Commit's card and the Overview
+    // content are both absent from this route.
+    expect(screen.queryByRole('heading', { name: 'Commit' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Overview' })).not.toBeInTheDocument()
   })
 
-  it('renders zero cards when the dashboard has none', async () => {
-    vi.stubGlobal('fetch', mockFetch([]))
+  it('renders the placeholder for a dashboard card whose module_id has no feature module wired up yet', async () => {
+    vi.stubGlobal('fetch', mockFetch([{ module_id: 'staffing', position: 0 }]))
 
-    renderWithProviders()
+    renderWithProviders('/modules/staffing')
 
     await waitFor(() => {
-      expect(screen.queryByText('Loading dashboard…')).not.toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Staffing' })).toBeInTheDocument()
     })
-
-    expect(screen.queryByText('no live data yet')).not.toBeInTheDocument()
+    expect(screen.getByText('no live data yet')).toBeInTheDocument()
   })
 
-  it('still renders the Layout/Header/Sidebar shell and the PROMPT-18 identity line', async () => {
+  it('renders a "Module not available" fallback for a moduleId with no matching dashboard card', async () => {
     vi.stubGlobal('fetch', mockFetch([{ module_id: 'sales', position: 0 }]))
 
-    renderWithProviders()
+    renderWithProviders('/modules/commit')
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Module not available' })).toBeInTheDocument()
+    })
+  })
+
+  it('still renders the Layout/Header/Sidebar shell and the PROMPT-18 identity line on every route', async () => {
+    vi.stubGlobal('fetch', mockFetch([{ module_id: 'sales', position: 0 }]))
+
+    renderWithProviders('/modules/sales')
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Cognitum Consultants' })).toBeInTheDocument()
@@ -133,11 +163,29 @@ describe('DashboardPage', () => {
     expect(screen.getByRole('navigation', { name: 'Primary' })).toBeInTheDocument()
   })
 
+  it('navigates from Overview to a module route by clicking its Sidebar link', async () => {
+    vi.stubGlobal('fetch', mockFetch([{ module_id: 'sales', position: 0 }], ['sales']))
+
+    renderWithProviders('/')
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('link', { name: 'Sales' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Sales' })).toBeInTheDocument()
+    })
+    expect(screen.getByLabelText('Company Name')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Overview' })).not.toBeInTheDocument()
+  })
+
   it('POSTs to /api/logout when "Sign out" is clicked', async () => {
     const fetchMock = mockFetch([])
     vi.stubGlobal('fetch', fetchMock)
 
-    renderWithProviders()
+    renderWithProviders('/')
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
